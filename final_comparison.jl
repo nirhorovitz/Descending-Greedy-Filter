@@ -499,12 +499,13 @@ end
 """
 Greedy spanner with a tqdm-style progress bar over candidate edges.
 Functionally equivalent to `Algorithms.run_algorithm(GreedySpanner(), instance)`,
-plus periodic APSP checks at 10/20/.../90% of decided edges that allow early
-termination once the graph is already a valid t-spanner over P × P.
+plus periodic APSP checks every `check_step_pct`% of decided edges (default 5%)
+that allow early termination once the graph is already a valid t-spanner over P × P.
 """
 function greedy_with_progress(points::Vector{Point2D}, t::Float64;
                               label::String = "greedy",
-                              early_check::Bool = true)
+                              early_check::Bool = true,
+                              check_step_pct::Float64 = 5.0)
     n = length(points)
     edges = Algorithms.get_all_edges(n, points)  # already sorted ascending by distance
     g = SimpleWeightedGraph(n)
@@ -512,7 +513,8 @@ function greedy_with_progress(points::Vector{Point2D}, t::Float64;
     prog = Progress(n_edges; desc="    [$label t=$(round(t, digits=4))] ",
                     showspeed=true, barlen=30, dt=0.5)
 
-    next_check_pct = 10
+    next_check_pct = check_step_pct
+    max_check_pct = 100.0 - check_step_pct + 1e-9  # last check just below 100%
     for (i, (u, v, dist)) in enumerate(edges)
         limit = t * dist
         d_g = Algorithms.get_graph_distance(g, u, v, points, limit)
@@ -521,7 +523,7 @@ function greedy_with_progress(points::Vector{Point2D}, t::Float64;
         end
         next!(prog; showvalues=[(:edges_kept, ne(g))])
 
-        if early_check && next_check_pct <= 90
+        if early_check && next_check_pct <= max_check_pct
             pct_done = 100.0 * i / n_edges
             if pct_done >= next_check_pct
                 println()
@@ -537,7 +539,7 @@ function greedy_with_progress(points::Vector{Point2D}, t::Float64;
                 else
                     println("    [$label] not yet valid (APSP took $(round(elapsed, digits=2))s, first violation src=$fs dst=$fd), continuing.")
                 end
-                next_check_pct += 10
+                next_check_pct += check_step_pct
             end
         end
     end

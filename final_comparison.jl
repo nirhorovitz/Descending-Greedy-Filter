@@ -322,15 +322,20 @@ end
 function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
                       cleared::Ref{Int}, decided::Ref{Int}, total::Int,
                       stats::DGFStats, bisect_until_pct::Float64,
+                      leftover::Vector{Tuple{Int,Int,Float64}},
                       depth::Int=0)
     if isempty(edge_list)
         return 0
     end
 
     # Once `bisect_until_pct` of edges have been decided (cleared or restored
-    # as necessary), switch from binary search to one-by-one processing.
+    # as necessary), STOP bisecting: defer every still-undecided edge into
+    # `leftover` so the caller can run a single 1by1 pass over the union.
+    # All edges in `edge_list` are currently removed in `ctx` and stay removed
+    # until the top-level `apply_dgf!` restores them at the start of 1by1.
     if total > 0 && decided[] >= bisect_until_pct * total
-        return dgf_process_one_by_one!(ctx, edge_list, cleared, decided, total, stats, depth)
+        append!(leftover, edge_list)
+        return 0
     end
 
     # Fast pre-check: test removed edges' own pairs before full APSP
@@ -352,7 +357,9 @@ function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
         if length(edge_list) >= 4
             pct = round(100.0 * decided[] / total, digits=1)
             avg_ms = stats.apsp_count > 0 ? round(stats.apsp_total_ms / stats.apsp_count, digits=1) : 0.0
-            println("    [dgf] depth=$depth: cleared $(length(edge_list)) edges, total decided $(decided[])/$total ($(pct)%, cleared=$(cleared[])) [apsp=$(stats.apsp_count), avg=$(avg_ms)ms, quick_hits=$(stats.quick_hits)]")
+            # In-place updating line: \r returns to col 0, \033[2K clears the row.
+            print("\r\033[2K    [dgf] depth=$depth: cleared $(length(edge_list)) edges, total decided $(decided[])/$total ($(pct)%, cleared=$(cleared[])) [apsp=$(stats.apsp_count), avg=$(avg_ms)ms, quick_hits=$(stats.quick_hits)]")
+            flush(stdout)
         end
         return length(edge_list)
     end
@@ -378,13 +385,13 @@ function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
     for (u, v, _) in first_half
         dgf_rem_edge!(ctx, u, v)
     end
-    r1 = dgf_bisect!(ctx, first_half, cleared, decided, total, stats, bisect_until_pct, depth + 1)
+    r1 = dgf_bisect!(ctx, first_half, cleared, decided, total, stats, bisect_until_pct, leftover, depth + 1)
 
     # Process second half
     for (u, v, _) in second_half
         dgf_rem_edge!(ctx, u, v)
     end
-    r2 = dgf_bisect!(ctx, second_half, cleared, decided, total, stats, bisect_until_pct, depth + 1)
+    r2 = dgf_bisect!(ctx, second_half, cleared, decided, total, stats, bisect_until_pct, leftover, depth + 1)
 
     return r1 + r2
 end
@@ -426,7 +433,14 @@ function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Flo
     removed = if bisect_until_pct <= 0.0
         dgf_process_one_by_one!(ctx, edge_list, cleared, decided, n_before, stats, 0)
     else
-        dgf_bisect!(ctx, edge_list, cleared, decided, n_before, stats, bisect_until_pct)
+        leftover = Tuple{Int,Int,Float64}[]
+        r_bisect = dgf_bisect!(ctx, edge_list, cleared, decided, n_before, stats,
+                                bisect_until_pct, leftover)
+        # Commit the in-place [dgf] bisect line before the 1by1 phase / summary.
+        println()
+        r_one = isempty(leftover) ? 0 :
+            dgf_process_one_by_one!(ctx, leftover, cleared, decided, n_before, stats, 0)
+        r_bisect + r_one
     end
     avg_ms = stats.apsp_count > 0 ? round(stats.apsp_total_ms / stats.apsp_count, digits=1) : 0.0
     println("    [dgf] done: removed=$removed, remaining=$(n_before - removed)")
@@ -587,7 +601,7 @@ function run_sqrt_greedy_dgf(instance::SpannerInstance, dist_matrix::Matrix{Floa
     g = greedy_with_progress(instance.points, sqrt_t; label="sqrt(t)-greedy")
     edges_after_greedy = ne(g)
 
-    removed = apply_dgf!(g, dist_matrix, t; bisect_until_pct=0.5)
+    removed = apply_dgf!(g, dist_matrix, t; bisect_until_pct=0.1)
 
     runtime = time() - start_time
     stats = Dict{Symbol,Any}(:sqrt_t => sqrt_t,
@@ -635,7 +649,7 @@ function run_dgf(instance::SpannerInstance, dist_matrix::Matrix{Float64})
     end
     n_complete = ne(g)
 
-    removed = apply_dgf!(g, dist_matrix, instance.t; bisect_until_pct=0.8)
+    removed = apply_dgf!(g, dist_matrix, instance.t; bisect_until_pct=0.95)
 
     runtime = time() - start_time
     stats = Dict{Symbol,Any}(:edges_complete => n_complete,

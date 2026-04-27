@@ -321,14 +321,15 @@ end
 
 function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
                       cleared::Ref{Int}, decided::Ref{Int}, total::Int,
-                      stats::DGFStats, depth::Int=0)
+                      stats::DGFStats, bisect_until_pct::Float64,
+                      depth::Int=0)
     if isempty(edge_list)
         return 0
     end
 
-    # Once 70% of edges have been decided (cleared or restored as necessary),
-    # switch from binary search to one-by-one processing.
-    if total > 0 && decided[] >= 0.7 * total
+    # Once `bisect_until_pct` of edges have been decided (cleared or restored
+    # as necessary), switch from binary search to one-by-one processing.
+    if total > 0 && decided[] >= bisect_until_pct * total
         return dgf_process_one_by_one!(ctx, edge_list, cleared, decided, total, stats, depth)
     end
 
@@ -377,13 +378,13 @@ function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
     for (u, v, _) in first_half
         dgf_rem_edge!(ctx, u, v)
     end
-    r1 = dgf_bisect!(ctx, first_half, cleared, decided, total, stats, depth + 1)
+    r1 = dgf_bisect!(ctx, first_half, cleared, decided, total, stats, bisect_until_pct, depth + 1)
 
     # Process second half
     for (u, v, _) in second_half
         dgf_rem_edge!(ctx, u, v)
     end
-    r2 = dgf_bisect!(ctx, second_half, cleared, decided, total, stats, depth + 1)
+    r2 = dgf_bisect!(ctx, second_half, cleared, decided, total, stats, bisect_until_pct, depth + 1)
 
     return r1 + r2
 end
@@ -392,7 +393,7 @@ end
 Apply DGF to graph `g` in-place. Returns number of edges removed.
 """
 function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Float64;
-                     one_by_one_only::Bool=false)
+                     bisect_until_pct::Float64=0.7)
     n = nv(g)
     ctx = DGFContext(n, dist_matrix, t)
 
@@ -405,7 +406,13 @@ function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Flo
     sort!(edge_list, by=x -> x[3], rev=true)  # descending
 
     n_before = length(edge_list)
-    mode = one_by_one_only ? "one-by-one only" : "binary search → 1by1 at 70%"
+    mode = if bisect_until_pct <= 0.0
+        "one-by-one only"
+    elseif bisect_until_pct >= 1.0
+        "binary search only"
+    else
+        "binary search → 1by1 at $(round(100*bisect_until_pct, digits=1))%"
+    end
     println("    [dgf] starting: $(n_before) edges, n=$n, t=$t, threads=$(Threads.nthreads()), mode=$mode")
 
     # Remove all edges
@@ -416,10 +423,10 @@ function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Flo
     cleared = Ref(0)
     decided = Ref(0)
     stats = DGFStats()
-    removed = if one_by_one_only
+    removed = if bisect_until_pct <= 0.0
         dgf_process_one_by_one!(ctx, edge_list, cleared, decided, n_before, stats, 0)
     else
-        dgf_bisect!(ctx, edge_list, cleared, decided, n_before, stats)
+        dgf_bisect!(ctx, edge_list, cleared, decided, n_before, stats, bisect_until_pct)
     end
     avg_ms = stats.apsp_count > 0 ? round(stats.apsp_total_ms / stats.apsp_count, digits=1) : 0.0
     println("    [dgf] done: removed=$removed, remaining=$(n_before - removed)")
@@ -580,7 +587,7 @@ function run_sqrt_greedy_dgf(instance::SpannerInstance, dist_matrix::Matrix{Floa
     g = greedy_with_progress(instance.points, sqrt_t; label="sqrt(t)-greedy")
     edges_after_greedy = ne(g)
 
-    removed = apply_dgf!(g, dist_matrix, t; one_by_one_only=true)
+    removed = apply_dgf!(g, dist_matrix, t; bisect_until_pct=0.5)
 
     runtime = time() - start_time
     stats = Dict{Symbol,Any}(:sqrt_t => sqrt_t,
@@ -606,7 +613,7 @@ function run_yao_dgf(instance::SpannerInstance, dist_matrix::Matrix{Float64})
     g = deepcopy(yao_res.graph)
     edges_after_yao = ne(g)
 
-    removed = apply_dgf!(g, dist_matrix, instance.t)
+    removed = apply_dgf!(g, dist_matrix, instance.t; bisect_until_pct=0.8)
 
     runtime = time() - start_time
     stats = Dict{Symbol,Any}(:k => get(yao_res.stats, :k, 0),
@@ -628,7 +635,7 @@ function run_dgf(instance::SpannerInstance, dist_matrix::Matrix{Float64})
     end
     n_complete = ne(g)
 
-    removed = apply_dgf!(g, dist_matrix, instance.t)
+    removed = apply_dgf!(g, dist_matrix, instance.t; bisect_until_pct=0.8)
 
     runtime = time() - start_time
     stats = Dict{Symbol,Any}(:edges_complete => n_complete,

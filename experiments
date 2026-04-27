@@ -1,0 +1,30 @@
+#!/bin/bash
+
+N=300
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --n) N="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT="$SCRIPT_DIR/final_comparison.jl"
+
+START=$SECONDS
+
+echo "========== N=5000 t=1.5 --no-dgf =========="
+julia --threads=auto "$SCRIPT" "5000" "1.5" "--no-dgf"
+
+echo "========== N=5000 t=1.1 --no-dgf =========="
+julia --threads=auto "$SCRIPT" "5000" "1.1" "--no-dgf"
+
+echo "========== N=3000 t=1.01 --no-dgf =========="
+julia --threads=auto "$SCRIPT" "3000" "1.01" "--no-dgf"
+
+echo "========== N=1000 t=1.001 --no-dgf =========="
+julia --threads=auto "$SCRIPT" "1000" "1.001" "--no-dgf"
+
+
+ELAPSED=$((SECONDS - START))
+echo "========== Total time: $((ELAPSED / 60))m $((ELAPSED % 60))s =========="

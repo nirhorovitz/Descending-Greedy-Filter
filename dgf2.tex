@@ -1,0 +1,1111 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{booktabs}
+\geometry{a4paper, margin=1in}
+
+% hyperref must be loaded (nearly) last. It subsumes `url` and provides
+% the \href command that the `plainurl` bibstyle emits in the .bbl for
+% DOIs.
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\old}[1]{{}}
+\newtheorem{theorem}{Theorem}
+\newtheorem{corollary}{Corollary}
+\newtheorem{conjecture}[theorem]{Conjecture}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{claim}[theorem]{Claim}
+\newtheorem{observation}[theorem]{Observation}
+\newtheorem{definition}[theorem]{Definition}
+
+\DeclareMathOperator{\wt}{wt}
+\DeclareMathOperator{\MST}{MST}
+\DeclareMathOperator{\APSP}{APSP}
+
+\title{Descending Greedy Filter:\\Light Spanners via Edge-Minimality}
+\author{P.~Carmi, N.~Horovitz, Y.~Yashuk}
+\date{April 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We present a new construction of geometric spanners, which we call the
+\emph{Descending Greedy Filter} (DGF). Starting from the complete graph,
+DGF examines edges in \emph{non-ascending} order of length and discards
+every edge whose removal does not violate the $t$-spanner condition.
+We give the algorithm, its time and space complexity, and conjecture
+that its output has $O(n)$ edges and total weight $O(\wt(\MST(P)))$.
+We then extract from DGF a general filtering procedure that turns any
+$t$-spanner into a \emph{minimal} $t$-spanner (one in which every edge
+is essential), and conjecture the same sparsity and weight bounds for
+every minimal $t$-spanner in the plane. A recursive binary-search
+implementation reduces the number of all-pairs shortest path (APSP)
+computations from $\Theta(m)$ to $O(k\log m)$, where $m$ is the input
+size and $k$ is the number of edges in the output, giving a near-linear
+speedup in the number of APSP calls. Experiments on random point sets
+in the unit square with $n\in\{1000,\,2000,\,5000\}$ and
+$t\in\{1.001,\,1.01,\,1.1,\,1.5\}$ show that DGF and its variants
+produce spanners whose edge count matches the classical greedy spanner
+to within a fraction of a percent while using $4$--$7\%$ less total
+weight, with the exact stretch preserved.
+\end{abstract}
+
+\section{Introduction}
+Geometric spanners are a central object in computational geometry. Given
+a set $P$ of $n$ points in the plane and a stretch parameter $t\ge 1$, a
+geometric $t$-spanner is a graph $G=(P,E)$ in which the shortest-path
+distance between any pair of points is at most $t$ times their Euclidean
+distance. Such structures have been extensively studied because of their
+applications in network design, approximation algorithms, and distributed
+systems.
+
+Among the many known constructions, the \emph{greedy spanner} of
+Alth\"ofer, Das, Dobkin, Joseph and Soares is widely regarded as the
+gold standard: it achieves $O(n)$ edges, total weight
+$O(\wt(\MST(P)))$, stretch exactly $t$, and, by a line of work
+culminating in Filtser and Solomon, is existentially optimal in the
+sense that its sparsity and weight cannot be improved in the worst
+case. Empirical studies consistently place the greedy spanner ahead of
+Yao graphs, $\Theta$-graphs and WSPD-based constructions on every
+quality metric except construction time.
+
+This raises a natural question: is the greedy spanner optimal not only
+existentially, but also \emph{instance by instance}? Equivalently, on a
+given input, can one find a $t$-spanner with lower total weight (or fewer
+edges) than the greedy spanner, without sacrificing the
+stretch guarantee? The greedy spanner is \emph{edge-minimal} --- no
+single edge can be removed while preserving the stretch --- but being
+edge-minimal is a much weaker property than being globally optimal, and
+nothing in the greedy construction is tailored to exploit long,
+redundant edges created late in the process.
+
+\paragraph{Our contributions.}
+We introduce the \emph{Descending Greedy Filter} (DGF), a construction
+dual to the greedy spanner, and investigate the class of edge-minimal
+$t$-spanners in the plane. Specifically:
+\begin{itemize}
+  \item \textbf{A new construction.} DGF (Algorithm~\ref{alg:dgf})
+    starts from the complete graph and removes edges in
+    \emph{non-ascending} order of length whenever doing so preserves
+    the stretch $t$. The output is by construction an edge-minimal
+    $t$-spanner.
+  \item \textbf{A filtering procedure.} We extract from DGF a general
+    filter (Algorithm~\ref{alg:dgf-filter}) that converts any
+    $t$-spanner into an edge-minimal one, and prove
+    (Theorem~\ref{thm:filter-minimal}) that the result is a subset of
+    the input and minimal in a pair-witness sense.
+  \item \textbf{Conjectures on minimality.} We state four conjectures
+    (Conjectures~\ref{conj:dgf-edges}--\ref{conj:min-weight}): DGF
+    outputs $O(n)$ edges and $O(\wt(\MST(P)))$ weight, and (more
+    strongly) \emph{every} edge-minimal $t$-spanner in the plane has
+    these same bounds. We support these conjectures experimentally and
+    discuss why the weight conjecture for arbitrary minimal spanners
+    is more delicate than the sparsity conjecture.
+  \item \textbf{A faster implementation.} We show that the $\Theta(m)$
+    APSP calls of the naive DGF can be reduced to $O(k\log m)$, where
+    $m=\binom{n}{2}$ is the input size and $k$ is the output size
+    (Algorithms~\ref{alg:dgf-bisect-main}--\ref{alg:bisect}). The
+    technique is a recursive binary search that certifies contiguous
+    batches of removable edges with a single APSP call.
+  \item \textbf{Empirical comparison.} On random point sets in the
+    unit square, with $n\in\{1000,\,2000,\,5000\}$ and
+    $t\in\{1.001,\,1.01,\,1.1,\,1.5\}$, DGF and its variants produce
+    spanners with edge counts that match the greedy spanner to
+    within a fraction of a percent, but with total weight that is
+    consistently $4$--$7\%$ lower, while preserving the exact stretch
+    guarantee. We also examine the role of preprocessing: running DGF
+    on top of a Yao graph leaves the output essentially unchanged, and
+    yields a large runtime speedup for moderate $t$, but loses its
+    advantage for very strict $t$ (because Yao itself is then no
+    longer sparse), whereas the $\sqrt{t}$-Greedy preprocessor remains
+    effective in both regimes.
+\end{itemize}
+
+\paragraph{Technical overview.}
+The key observation behind DGF is that removing the \emph{longest}
+redundant edge first allows shorter edges to inherit its role: a long
+edge $(p,q)$ that can be detoured through intermediate points
+$p\!\to\!x\!\to\!q$ at stretch $\le t$ is almost always detoured
+through edges that are \emph{themselves} part of shorter redundant
+detour paths, which DGF will still get to examine later. Greedy, by
+contrast, commits to short edges first and can leave long edges
+stranded. This ordering heuristic is so aggressive that in most
+iterations a large prefix of edges is simultaneously removable; our
+binary-search implementation exploits exactly this by bisecting on
+prefixes, paying one APSP call per bisection rather than per edge.
+
+For the general minimality question we treat the result of DGF as an
+instance of a more general phenomenon: on any input, the set of
+edge-minimal $t$-spanners forms a combinatorial family that is poorly
+understood. We conjecture that this family always lies inside an
+$O(n)$-edge, $O(\wt(\MST))$-weight envelope; a proof of either
+conjecture would extend the existential-optimality results of Filtser
+and Solomon from the single spanner produced by greedy to the entire
+minimality class.
+
+\paragraph{Paper organization.}
+Section~\ref{sec:algorithm} defines DGF and analyses its time and space
+complexity. Section~\ref{sec:minimal-def} defines minimal
+$t$-spanners, and Section~\ref{sec:filtering} shows how DGF can be
+used as a filter. Section~\ref{sec:conjectures} collects the four
+sparsity and weight conjectures, for DGF and for arbitrary minimal
+$t$-spanners, together with a discussion of why the weight conjecture
+for arbitrary minimal spanners is delicate.
+Section~\ref{sec:binary-search} presents the recursive binary-search
+implementation. Section~\ref{sec:experiments} reports experiments,
+and Section~\ref{sec:related-work} surveys related work.
+Section~\ref{sec:open-problems} concludes with open problems.
+
+\newpage
+
+\section{The Descending Greedy Filter Algorithm}
+\label{sec:algorithm}
+
+\algrenewcommand{\algorithmiccomment}[1]{\hspace{3em}// #1}
+\begin{algorithm}[h]
+\caption{Descending Greedy Filter (DGF)}
+\label{alg:dgf}
+\begin{algorithmic}[1]
+\Statex \textbf{Input:}
+\Statex \hspace{1cm} $P$: a set of $n$ points in $\mathbb{R}^d$.
+\Statex \hspace{1cm} $t$: a real constant with $t>1$.
+\Statex \textbf{Output:}
+\Statex \hspace{1cm} A set of edges $E$ such that $(P,E)$ is a $t$-spanner of $P$.
+
+\State Sort the $\binom{n}{2}$ unordered pairs of distinct points in \textbf{non-ascending} order of
+       their Euclidean distances (breaking ties arbitrarily) and store them in a list $L$.
+\State $E \leftarrow L$
+\For{each unordered pair $(p,q) \in L$ in \textbf{non-ascending} order}
+    \State $E \leftarrow E \setminus \{(p,q)\}$
+    \For{each unordered pair $(r,s) \in \binom{P}{2}$}
+        \If{$\delta_{E}(r,s) > t \cdot |rs|$}
+            \State $E \leftarrow E \cup \{(p,q)\}$
+            \State \textbf{break}
+        \EndIf
+    \EndFor
+\EndFor
+\State \Return $E$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Correctness}
+At every point during the execution the current edge set $E$ is a
+$t$-spanner of $P$: the algorithm starts with the complete graph (which
+is trivially a $t$-spanner) and only removes an edge when the resulting
+graph is still a $t$-spanner. Hence the returned $E$ is a $t$-spanner.
+
+\subsection{Time complexity}
+Let $m=\binom{n}{2}=\Theta(n^2)$ be the initial number of edges, and let
+$T_{\APSP}(n,m)$ denote the cost of a single all-pairs shortest
+path ($\APSP$) computation on a graph with $n$ vertices and $m$ edges.
+
+Sorting the $m$ edges costs $O(m\log m)=O(n^2 \log n)$.
+
+For every edge we check whether its removal causes a violation of the
+$t$-spanner condition. The canonical way to do this is to run $\APSP$
+after the tentative removal and compare $\delta_E(r,s)$ with
+$t\cdot|rs|$ for every pair. Using Dijkstra from all sources with a
+Fibonacci heap, one $\APSP$ call costs
+\[
+   T_{\APSP}(n,m) \;=\; O\bigl(n\cdot(m+n\log n)\bigr).
+\]
+Since there are $m$ such checks, the total time is
+\[
+   O\bigl(m\cdot n\cdot(m+n\log n)\bigr) \;=\; O(n^5)
+\]
+when $m=\Theta(n^2)$, i.e. the full complete graph is the input.
+
+\subsection{Space complexity}
+DGF stores the edge list $L$, the current edge set $E$, and the
+data structures needed for APSP (distance matrix, adjacency lists,
+priority queue). All of these are $O(m)=O(n^2)$, so the total space
+complexity is
+\[
+   O(n^2).
+\]
+
+\newpage
+
+\section{Minimal \texorpdfstring{$t$}{t}-spanners}
+\label{sec:minimal-def}
+
+\begin{definition}[minimal $t$-spanner]\label{def:minimal}
+Let $P$ be a set of points and $t>1$. An edge set $E\subseteq \binom{P}{2}$
+is a \emph{minimal $t$-spanner} of $P$ if
+\begin{enumerate}
+    \item $(P,E)$ is a $t$-spanner of $P$, and
+    \item for every edge $(p,q)\in E$, the set $(E \setminus \{(p,q)\})$ is not a $t$-spanner for $P$. 
+\end{enumerate}
+Equivalently:
+\[
+   \forall (p,q)\in E,\; \exists (r,s)\in P\times P\;:\;
+   \delta_{E\setminus\{(p,q)\}}(r,s) > t\cdot|rs|.
+\]
+\end{definition}
+
+Informally, a $t$-spanner is \emph{minimal} (also called \emph{edge-minimal})
+when no edge can be removed without violating the stretch guarantee. The
+greedy spanner is minimal by construction; most classical constructions
+($\Theta$-graphs, Yao graphs, WSPD-based spanners) are not.
+
+\section{Minimizing an arbitrary \texorpdfstring{$t$}{t}-spanner with DGF}
+\label{sec:filtering}
+
+The DGF procedure of Algorithm~\ref{alg:dgf} can be applied not only to
+the complete graph but to any input edge set that already forms a
+$t$-spanner. The only change is that the initial list $L$ contains
+only the edges of the input $t$-spanner.
+
+\begin{algorithm}[h]
+\caption{Descending Greedy Filter on a $t$-spanner}
+\label{alg:dgf-filter}
+\begin{algorithmic}[1]
+\Statex \textbf{Input:}
+\Statex \hspace{1cm} $P$: a set of $n$ points in $\mathbb{R}^d$.
+\Statex \hspace{1cm} $t$: a real constant with $t>1$.
+\Statex \hspace{1cm} $E_i$: an edge set such that $(P,E_i)$ is a $t$-spanner of $P$.
+\Statex \textbf{Output:}
+\Statex \hspace{1cm} A set of edges $E$ with $E\subseteq E_i$ such that $(P,E)$ is a minimal $t$-spanner of $P$.
+
+\State Sort $E_i$ in \textbf{non-ascending} order by distance into a list $L$.
+\State $E \leftarrow L$
+\For{each unordered pair $(p,q) \in L$ in \textbf{non-ascending} order}
+    \State $E \leftarrow E \setminus \{(p,q)\}$
+    \For{each unordered pair $(r,s) \in \binom{P}{2}$}
+        \If{$\delta_{E}(r,s) > t \cdot |rs|$}
+            \State $E \leftarrow E \cup \{(p,q)\}$
+            \State \textbf{break}
+        \EndIf
+    \EndFor
+\EndFor
+\State \Return $E$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{theorem}\label{thm:filter-minimal}
+Let $E_i$ be a $t$-spanner of $P$, and let $E$ be the output of
+Algorithm~\ref{alg:dgf-filter} on input $(P,t,E_i)$. Then
+\begin{enumerate}
+    \item $E \subseteq E_i$,
+    \item $(P,E)$ is a $t$-spanner of $P$, and
+    \item $E$ is a minimal $t$-spanner of $P$ in the sense of
+          Definition~\ref{def:minimal}.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+Property (1) is immediate, since the algorithm only removes edges.
+
+Property (2) follows from the invariant that $E$ is a $t$-spanner at
+every iteration: the algorithm starts with the $t$-spanner $E_i$, and
+whenever an edge is removed we verify that the result is still a
+$t$-spanner; otherwise the edge is restored.
+
+Property (3). Let $(p,q)\in E$ be an edge in the output. We must
+exhibit a pair $(r,s)\in P\times P$ such that
+$\delta_{E\setminus\{(p,q)\}}(r,s)>t\cdot|rs|$.
+
+Denote by $E'$ the state of $E$ at the moment the main loop inspected
+the edge $(p,q)$. Because the algorithm only removes edges after the
+inspection of $(p,q)$, we have $E\subseteq E'$.
+
+The fact that $(p,q)\in E$ means that the inner violation check
+succeeded, i.e.\ there exist $(r,s)\in P\times P$ with
+\[
+   \delta_{E'\setminus\{(p,q)\}}(r,s) \;>\; t\cdot|rs|.
+\]
+Since $E\subseteq E'$, removing more edges can only increase shortest
+path distances, hence
+\[
+   \delta_{E\setminus\{(p,q)\}}(r,s) \;\ge\;
+   \delta_{E'\setminus\{(p,q)\}}(r,s) \;>\; t\cdot|rs|,
+\]
+which is exactly the minimality condition for $(p,q)$.
+\end{proof}
+
+\subsection{Complexity of the filtering version}
+Let $m_i=|E_i|$ denote the number of edges in the input $t$-spanner.
+Sorting costs $O(m_i\log m_i)$. For each of the $m_i$ candidate edges
+we run an APSP on the current graph with at most $m_i$ edges, giving
+\[
+   O\bigl(m_i\cdot n\cdot(m_i+n\log n)\bigr)
+\]
+total time. In the typical case where the input already satisfies
+$m_i=O(n)$ (e.g.\ $E_i$ is a Yao, $\Theta$, or greedy spanner), this
+simplifies to $O(n^3 \log n)$. The space complexity is $O(m_i)$.
+
+\section{Sparsity and Weight Conjectures}
+\label{sec:conjectures}
+
+We now state our main conjectures. Throughout this section, $P$ is a
+set of $n$ points in the plane and $t>1$ is a constant; the hidden
+constants in the $O$-notation may depend on $t$. The conjectures come
+in two flavors. The first pair concerns the specific output of DGF.
+The second pair concerns \emph{any} minimal $t$-spanner in the sense
+of Definition~\ref{def:minimal}.
+
+\subsection{Conjectures for DGF}
+Let $G_{\mathrm{DGF}}=(P,E_f)$ be the output of Algorithm~\ref{alg:dgf}
+on $P$ with parameter $t$.
+
+\begin{conjecture}[sparsity of DGF]\label{conj:dgf-edges}
+$|E_f| \;=\; O(n)$.
+\end{conjecture}
+
+\begin{conjecture}[weight of DGF]\label{conj:dgf-weight}
+$\wt(E_f) \;=\; O\!\bigl(\wt(\MST(P))\bigr)$.
+\end{conjecture}
+
+\subsection{Conjectures for arbitrary minimal \texorpdfstring{$t$}{t}-spanners}
+Let $E$ be any minimal $t$-spanner of $P$ in the sense of
+Definition~\ref{def:minimal}.
+
+\begin{conjecture}[sparsity of any minimal $t$-spanner]\label{conj:min-edges}
+$|E| \;=\; O(n)$.
+\end{conjecture}
+
+\begin{conjecture}[weight of any minimal $t$-spanner]\label{conj:min-weight}
+$\wt(E) \;=\; O\!\bigl(\wt(\MST(P))\bigr)$.
+\end{conjecture}
+
+\subsection{Discussion}
+Conjectures~\ref{conj:min-edges} and~\ref{conj:min-weight} strictly
+generalize Conjectures~\ref{conj:dgf-edges} and~\ref{conj:dgf-weight}
+respectively, since the output of DGF is minimal by
+Theorem~\ref{thm:filter-minimal} (applied to $E_i=\binom{P}{2}$).
+Likewise, the greedy spanner is minimal by construction, so the
+conjectures are consistent with the classical bounds $O(n)$ edges
+and $O(\wt(\MST(P)))$ weight that are known for the greedy spanner.
+All four conjectures are supported by the experiments reported in
+Section~\ref{sec:experiments}: in every tested instance the number of
+edges of each minimal spanner we produce is close to $n$ and its
+total weight is at most a small multiple of $\wt(\MST(P))$.
+
+\newpage
+
+\section{Faster Implementation via Recursive Binary Search}
+\label{sec:binary-search}
+
+The na\"ive implementation of DGF (Algorithm~\ref{alg:dgf}) iterates
+over all edges one by one, and for each edge performs an APSP
+computation. This results in $\Theta(m)$ APSP calls, where
+$m=\binom{n}{2}$. In practice, the vast majority of the long edges turn
+out to be removable, and only a small subset is necessary. This
+motivates a binary-search approach that can certify large batches of
+removable edges with a single APSP call.
+
+\subsection{Key observation}
+Let $E$ be the current edge set (sorted in non-ascending order by
+weight), and let $S \subseteq E$ be a contiguous batch of edges. If
+removing all edges of $S$ from $E$ does not violate the $t$-spanner
+condition---that is, if for every $r,s\in P$ we have
+$\delta_{E\setminus S}(r,s) \le t\cdot|rs|$---then every edge in $S$
+is removable. A single APSP call therefore certifies the removal of an
+entire batch. When a violation is detected, we split the batch into two
+halves and recurse on each.
+
+\subsection{Algorithm}
+\begin{algorithm}[h]
+\caption{DGF with recursive binary search}
+\label{alg:dgf-bisect-main}
+\begin{algorithmic}[1]
+\Statex \textbf{Input:} $P$, $t$ as in Algorithm~\ref{alg:dgf}.
+\Statex \textbf{Output:} a $t$-spanner $E$ of $P$ identical to the output of Algorithm~\ref{alg:dgf}.
+
+\State Sort the $\binom{n}{2}$ pairs in \textbf{non-ascending} order by distance into a list $L$.
+\State $E \leftarrow L$
+\State $E \leftarrow \textsc{Bisect}(\emptyset,\, L,\, P,\, t)$
+\State \Return $E$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[h]
+\caption{\textsc{Bisect}$(E,\,S,\,P,\,t)$}
+\label{alg:bisect}
+\begin{algorithmic}[1]
+\Statex \textbf{Input:}
+\Statex \hspace{1cm} $E$: current edge set (i.e.\ $S$ has been removed from $E$ before the call).
+\Statex \hspace{1cm} $S$: batch of candidate edges to confirm as removable, sorted in non-ascending order by weight.
+\Statex \hspace{1cm} $P$: point set.
+\Statex \hspace{1cm} $t$: stretch parameter.
+\Statex \textbf{Output:} updated $E$ in which the removable edges of $S$ are discarded and the necessary edges are restored.
+
+\If{$S = \emptyset$}
+    \State \Return $E$
+\EndIf
+\State Compute APSP on $(P,E)$.
+\If{$\delta_E(r,s) \le t \cdot |rs|$ for every $(r,s)\in P\times P$}
+    \State \Return $E$ \Comment{No violation: every edge in $S$ is removable}
+\EndIf
+\If{$|S|=1$}
+    \State $E \leftarrow E \cup S$ \Comment{Single necessary edge: restore it}
+    \State \Return $E$
+\EndIf
+\State Split $S$ into $S_1$ (first, longer half) and $S_2$ (second, shorter half).
+\State $E \leftarrow E \cup S$ \Comment{Restore all edges in $S$}
+\State $E \leftarrow E \setminus S_1$
+\State $E \leftarrow \textsc{Bisect}(E,\, S_1,\, P,\, t)$
+\State $E \leftarrow E \setminus S_2$
+\State $E \leftarrow \textsc{Bisect}(E,\, S_2,\, P,\, t)$
+\State \Return $E$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Correctness}
+The binary-search implementation produces the same output as
+Algorithm~\ref{alg:dgf}. Each edge is either certified as removable
+(when the entire batch that contains it passes the violation check) or
+identified as necessary (when the recursion reaches a single-edge base
+case with a violation). Because the edges are processed in the same
+non-ascending order and the removal/restoration operations are
+symmetric, the final edge set is identical to that of
+Algorithm~\ref{alg:dgf}.
+
+\subsection{Time complexity}
+Let $m$ denote the number of edges given to \textsc{Bisect} at the top
+level, and let $k$ denote the number of necessary edges in the output.
+Let $T_{\APSP}(n,m)=O(n(m+n\log n))$ be the cost of a single
+$\APSP$ computation.
+
+\paragraph{APSP calls.}
+Each necessary edge traces a root-to-leaf path of depth at most
+$\lceil\log_2 m\rceil$ in the recursion tree, contributing
+$O(\log m)$ APSP calls. Every such path terminates at a single-edge
+base case where the edge is restored. Conversely, groups of removable
+edges are eliminated at internal nodes without further recursion.
+Therefore the total number of APSP calls is
+\[
+   O(k\log m).
+\]
+
+\paragraph{Overall complexity.}
+Sorting the edges takes $O(m\log m)$. The binary search performs
+$O(k\log m)$ APSP calls, each costing $O(n(m+n\log n))$. In
+addition, every level of the recursion performs $O(m)$ work for edge
+removal and restoration. The total time is therefore
+\[
+   O\!\left(m\log m \;+\; k\log m\cdot n(m+n\log n)\right).
+\]
+
+\paragraph{Comparison with the na\"ive approach.}
+The na\"ive implementation performs $m$ APSP calls, for
+$O(m\cdot n(m+n\log n))$. The binary search reduces this to
+$O(k\log m\cdot n(m+n\log n))$. Since geometric $t$-spanners are
+expected to satisfy $k=O(n)$ while $m=\Theta(n^2)$, the speedup factor
+is
+\[
+   \frac{m}{k\log m} \;=\; \frac{\Theta(n^2)}{O(n\log n)}
+   \;=\; \Omega\!\left(\frac{n}{\log n}\right),
+\]
+a near-linear improvement in the number of APSP calls.
+
+\paragraph{Concrete bounds assuming $k=O(n)$.}
+\begin{itemize}
+    \item \textbf{Complete graph input} ($m=\binom{n}{2}=\Theta(n^2)$):
+    each APSP costs $O(n^3)$, so the total time is
+    \[
+        O(n^2\log n + n\log n\cdot n^3) \;=\; O(n^4 \log n).
+    \]
+    \item \textbf{$t$-spanner input} ($m=O(n)$): each APSP costs
+    $O(n^2\log n)$, so the total time is
+    \[
+        O(n\log n + n\log n\cdot n^2\log n) \;=\; O(n^3 \log^2 n).
+    \]
+\end{itemize}
+
+\newpage
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Setup}
+All experiments are run on point sets drawn uniformly at random in the
+unit square $[0,1]^2$, with fixed random $\mathtt{seed} (=42)$. We
+compare the following algorithms:
+\begin{itemize}
+    \item \textbf{Greedy}: the classical greedy
+          $t$-spanner.
+    \item \textbf{$\sqrt{t}$-Greedy + DGF}: run the greedy algorithm
+          with parameter $\sqrt{t}$, then apply DGF
+          (Algorithm~\ref{alg:dgf-filter}) with parameter $t$ to the
+          result.
+    \item \textbf{Yao}: the Yao graph with the smallest $k$ such that
+          the construction guarantees stretch at most $t$.
+    \item \textbf{Yao + DGF}: run Yao with the above $k$, then apply
+          DGF with parameter $t$ to the resulting graph.
+    \item \textbf{$\sqrt{t}$-Yao + $\sqrt{t}$-Greedy}: run Yao with
+          parameter $\sqrt{t}$, then run greedy on the resulting edges
+          with parameter $\sqrt{t}$.
+    \item \textbf{DGF}: Algorithm~\ref{alg:dgf} starting from the
+          complete graph (using the recursive binary-search
+          implementation of Section~\ref{sec:binary-search}).
+\end{itemize}
+
+For every instance we report the number of edges, the total weight,
+the weight ratio over the MST (that is,
+$\wt(E)/\wt(\MST(P))$), the maximum and average vertex degrees, the
+empirically measured maximum stretch, whether the output is a valid
+$t$-spanner, and the running time in seconds.
+
+\subsection{Results for \texorpdfstring{$n=5000,\; t=1.5$}{n=5000, t=1.5}}
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabular}{lrrrrrrr}
+        \toprule
+        Algorithm & Edges & Weight & WtRatio & MaxDeg & AvgDeg & MaxStrch & Valid \\
+        \midrule
+        Yao + DGF                             & 9\,377           & \textbf{128.07}  & \textbf{2.80} & \textbf{7} & 3.75          & 1.5000           & \checkmark \\
+        $\sqrt{t}$-Greedy + DGF               & \textbf{9\,314}  & 128.91           & 2.81          & \textbf{7} & \textbf{3.73} & 1.4999           & \checkmark \\
+        Greedy                                & 9\,385           & 137.58           & 3.00          & \textbf{7} & 3.75          & 1.4999           & \checkmark \\
+        $\sqrt{t}$-Yao + $\sqrt{t}$-Greedy    & 14\,269          & 255.68           & 5.58          & 11         & 5.71          & 1.2754           & \checkmark \\
+        Yao                                   & 66\,839          & 2\,302.90        & 50.26         & 52         & 26.74         & \textbf{1.1647}  & \checkmark \\
+        \bottomrule
+    \end{tabular}
+    \caption{Summary for $n=5000$, $t=1.5$, $\mathtt{seed}=42$. Every output is a valid $1.5$-spanner.}
+    \label{tab:n5000-t1.5}
+\end{table}
+
+Table~\ref{tab:n5000-t1.5} reports the results. For $t=1.5$, both
+DGF-based variants produce spanners whose edge counts are essentially
+identical to the greedy spanner ($9\,377$ for Yao + DGF and $9\,314$
+for $\sqrt{t}$-Greedy + DGF, vs.\ $9\,385$ for greedy---within
+$0.1\%$). Their total weight, however, is about $7\%$ lower than
+greedy's ($128.07$ and $128.91$ vs.\ $137.58$), and the weight ratio
+over the MST drops from $3.00$ to $2.80$.
+
+\subsection{Results for \texorpdfstring{$n=5000,\; t=1.1$}{n=5000, t=1.1}}
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabular}{lrrrrrrr}
+        \toprule
+        Algorithm & Edges & Weight & WtRatio & MaxDeg & AvgDeg & MaxStrch & Valid \\
+        \midrule
+        Yao + DGF                             & 22\,191           & \textbf{463.89}   & \textbf{10.12} & 17           & 8.88          & 1.1000          & \checkmark \\
+        $\sqrt{t}$-Greedy + DGF               & \textbf{22\,127}  & 467.67            & 10.21          & \textbf{16}  & \textbf{8.85} & 1.1000          & \checkmark \\
+        Greedy                                & 22\,225           & 492.74            & 10.75          & \textbf{16}  & 8.89          & 1.1000          & \checkmark \\
+        $\sqrt{t}$-Yao + $\sqrt{t}$-Greedy    & 32\,320           & 858.65            & 18.74          & 25           & 12.93         & 1.0488          & \checkmark \\
+        Yao                                   & 224\,442          & 14\,250.23        & 311.00         & 137          & 89.78         & \textbf{1.0378} & \checkmark \\
+        \bottomrule
+    \end{tabular}
+    \caption{Summary for $n=5000$, $t=1.1$, $\mathtt{seed}=42$. Every output is a valid $1.1$-spanner.}
+    \label{tab:n5000-t1.1}
+\end{table}
+
+Table~\ref{tab:n5000-t1.1} reports the results. For the stricter
+stretch $t=1.1$ the pattern is the same: the DGF-based variants and
+greedy agree on edge count to within $0.15\%$ ($22\,191$ and
+$22\,127$ vs.\ $22\,225$), while the total weight is about $6\%$
+lower ($463.89$ and $467.67$ vs.\ $492.74$). The weight ratio over the
+MST drops from $10.75$ (greedy) to $10.12$ (Yao + DGF).
+
+\subsection{Results for \texorpdfstring{$n=2000,\; t=1.01$}{n=2000, t=1.01}}
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabular}{lrrrrrrr}
+        \toprule
+        Algorithm & Edges & Weight & WtRatio & MaxDeg & AvgDeg & MaxStrch & Valid \\
+        \midrule
+        DGF                                   & 27\,714           & \textbf{1\,647.42} & \textbf{56.85}  & \textbf{44}  & 27.71          & 1.0100          & \checkmark \\
+        Yao + DGF                             & 27\,714           & \textbf{1\,647.42} & \textbf{56.85}  & \textbf{44}  & 27.71          & 1.0100          & \checkmark \\
+        $\sqrt{t}$-Greedy + DGF               & \textbf{27\,659}  & 1\,657.07          & 57.18           & \textbf{44}  & \textbf{27.66} & 1.0100          & \checkmark \\
+        Greedy                                & 27\,739           & 1\,723.16          & 59.46           & \textbf{44}  & 27.74          & 1.0100          & \checkmark \\
+        $\sqrt{t}$-Yao + $\sqrt{t}$-Greedy    & 38\,837           & 2\,864.12          & 98.83           & 57           & 38.84          & 1.0050          & \checkmark \\
+        Yao                                   & 571\,029          & 156\,774.77        & 5\,409.63       & 860          & 571.03         & \textbf{1.0008} & \checkmark \\
+        \bottomrule
+    \end{tabular}
+    \caption{Summary for $n=2000$, $t=1.01$, $\mathtt{seed}=42$. Every output is a valid $1.01$-spanner.}
+    \label{tab:n2000-t1.01}
+\end{table}
+
+Table~\ref{tab:n2000-t1.01} reports the results. For the strict
+stretch $t=1.01$, Yao + DGF and the full DGF converge to an
+\emph{identical} solution ($27\,714$ edges, weight $1\,647.42$),
+despite starting from very different graphs: Yao has $571\,029$ edges
+here, roughly $20\times$ the output size, yet every one of the
+``extra'' edges is identified as redundant by DGF. The resulting edge
+count matches greedy ($27\,739$) to within $0.1\%$, while the total
+weight is about $4\%$ lower and the weight ratio over the MST drops
+from $59.46$ (greedy) to $56.85$ (DGF / Yao + DGF). The
+$\sqrt{t}$-Greedy + DGF variant sits at $27\,659$ edges and weight
+$1\,657.07$, very close to the other DGF-based outputs.
+
+\subsection{Results for \texorpdfstring{$n=1000,\; t=1.001$}{n=1000, t=1.001}}
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabular}{lrrrrrrr}
+        \toprule
+        Algorithm & Edges & Weight & WtRatio & MaxDeg & AvgDeg & MaxStrch & Valid \\
+        \midrule
+        DGF                                   & 38\,633          & \textbf{5\,556.17} & \textbf{267.16}  & 127           & 77.27          & 1.0010          & \checkmark \\
+        Yao + DGF                             & 38\,633          & \textbf{5\,556.17} & \textbf{267.16}  & 127           & 77.27          & 1.0010          & \checkmark \\
+        $\sqrt{t}$-Greedy + DGF               & \textbf{38\,574} & 5\,588.94          & 268.74           & 122           & \textbf{77.15} & 1.0010          & \checkmark \\
+        Greedy                                & 38\,682          & 5\,786.30          & 278.23           & \textbf{117}  & 77.36          & 1.0010          & \checkmark \\
+        $\sqrt{t}$-Yao + $\sqrt{t}$-Greedy    & 52\,375          & 9\,167.11          & 440.79           & 164           & 104.75         & 1.0005          & \checkmark \\
+        Yao                                   & 465\,760         & 235\,769.69        & 11\,336.68       & 982           & 931.52         & \textbf{1.0001} & \checkmark \\
+        \bottomrule
+    \end{tabular}
+    \caption{Summary for $n=1000$, $t=1.001$, $\mathtt{seed}=42$. Every output is a valid $1.001$-spanner.}
+    \label{tab:n1000-t1.001}
+\end{table}
+
+Table~\ref{tab:n1000-t1.001} reports the results in the most extreme
+regime we tested ($t-1=10^{-3}$). The qualitative pattern of the
+previous tables is preserved: DGF and Yao + DGF again converge to an
+\emph{identical} solution ($38\,633$ edges, weight $5\,556.17$),
+matching greedy on edges to within $0.13\%$ ($38\,682$) and reducing
+the total weight by about $4\%$ ($5\,786.30 \to 5\,556.17$), with the
+weight ratio over the MST dropping from $278.23$ to $267.16$. The
+$\sqrt{t}$-Greedy + DGF variant achieves the smallest edge count
+($38\,574$, again within $0.3\%$ of greedy).
+
+A new effect appears at this extreme stretch: the Yao graph itself is
+no longer a \emph{sparse} preprocessor. With $t-1=10^{-3}$, the cone
+half-angle becomes very small, and Yao retains $465\,760$
+edges---over $93\%$ of the $\binom{1000}{2}=499\,500$ candidate
+pairs---so the input handed to DGF after the Yao step is essentially
+the complete graph again. As a consequence, the runtime advantage of
+Yao preprocessing observed in the previous regimes disappears here:
+running DGF directly is no slower than running Yao + DGF (in our
+implementation, both took on the order of $4$--$5\times 10^{4}$
+seconds). By contrast, $\sqrt{t}$-Greedy remains effective as a
+preprocessor in this regime, because it produces a graph with only
+$O(n)$ edges (essentially the greedy $\sqrt{t}$-spanner) and the DGF
+pass on top of it terminates in roughly $7\times 10^{3}$
+seconds---about an order of magnitude faster than DGF on the full
+graph. The output of $\sqrt{t}$-Greedy + DGF is again within a tiny
+margin of pure DGF on every quality metric.
+
+\newpage
+
+\subsection{Discussion}
+
+To make the DGF-vs.-greedy comparison precise and uniform across the
+four regimes, Table~\ref{tab:summary-percent} reports, for each
+metric and each $(n,t)$ pair, the percentage change between the
+\emph{best} DGF-based algorithm (over $\{\text{DGF},\,$Yao + DGF$,\,
+\sqrt{t}\text{-Greedy} + \text{DGF}\}$) and the \emph{best}
+greedy-based algorithm (over $\{$Greedy$,\,\sqrt{t}\text{-Yao} +
+\sqrt{t}\text{-Greedy}\}$). Negative numbers favor the DGF family. In
+our data the best greedy-based algorithm turns out to be plain Greedy
+on every metric in every configuration ($\sqrt{t}$-Yao +
+$\sqrt{t}$-Greedy is strictly worse than Greedy across the board), so
+each cell is effectively ``best DGF-based vs.\ Greedy'', with the
+DGF representative chosen per cell. The rightmost column averages
+each row across the four regimes.
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabular}{lrrrrr}
+        \toprule
+        Metric  & $t=1.5$ & $t=1.1$ & $t=1.01$ & $t=1.001$ & Average \\
+        \midrule
+        Edges   & $-0.76\%$           & $-0.44\%$           & $-0.29\%$           & $-0.28\%$ & $-0.44\%$ \\
+        Weight  & $-6.91\%$           & $-5.86\%$           & $-4.40\%$           & $-3.98\%$ & $-5.28\%$ \\
+        WtRatio & $-6.67\%$           & $-5.86\%$           & $-4.39\%$           & $-3.98\%$ & $-5.22\%$ \\
+        MaxDeg  & $\phantom{+}0.00\%$ & $\phantom{+}0.00\%$ & $\phantom{+}0.00\%$ & $+4.27\%$ & $+1.07\%$ \\
+        AvgDeg  & $-0.53\%$           & $-0.45\%$           & $-0.29\%$           & $-0.27\%$ & $-0.39\%$ \\
+        \bottomrule
+    \end{tabular}
+    \caption{Percentage change in each metric: best DGF-based output
+    minus best greedy-based output, normalized by the best
+    greedy-based output. Negative numbers favor the DGF family. The
+    Average column is the arithmetic mean across the four regimes.}
+    \label{tab:summary-percent}
+\end{table}
+
+The table makes the qualitative findings visible at a glance.
+
+\paragraph{Edges (and average degree): ${\le}\,0.76\%$ reduction in every regime.}
+On edges, the best DGF-based algorithm in every cell is $\sqrt{t}$-Greedy
++ DGF, and it shaves between $0.28\%$ and $0.76\%$ off greedy's edge
+count, for an average reduction of $0.44\%$. Average degree mirrors
+this finding (since $\mathrm{AvgDeg} = 2\cdot \mathrm{Edges}/n$),
+with an average reduction of $0.39\%$. In absolute terms these are
+all changes of well under one percent; for practical purposes we
+view edge-minimal $t$-spanners of random Euclidean inputs as having
+an edge count that is essentially determined by the input, largely
+independent of which edge-minimization strategy produces them. This
+is also consistent with what one would expect from
+Conjecture~\ref{conj:min-edges}: if \emph{every} edge-minimal
+$t$-spanner has $O_{t,d}(n)$ edges, then greedy and DGF should be
+close.
+
+\paragraph{Weight (and weight ratio): $4$--$7\%$ reduction, monotone in $t$.}
+On total weight, the best DGF-based algorithm is consistently and
+measurably lighter than greedy: the gap shrinks monotonically from
+$-6.91\%$ at $t=1.5$ to $-3.98\%$ at $t=1.001$, averaging $-5.28\%$
+across the four regimes. The weight ratio over the MST drops by
+essentially the same amount ($-5.22\%$ on average), since both
+quantities are normalized by the same $\wt(\MST)$. The DGF
+representative achieving the best weight is Yao + DGF at $t=1.5,1.1$
+and pure DGF (which equals Yao + DGF on those instances) at
+$t=1.01,1.001$. Descending processing, which removes the longest
+redundant edge first, systematically leaves a slightly lighter
+edge-minimal representative of the set of all edge-minimal
+$t$-spanners on the input. This is the main empirical advantage of
+DGF over the classical greedy spanner.
+
+\paragraph{Maximum degree: ${\le}\,4.27\%$ \emph{increase}, only at the strictest $t$.}
+The one quality metric on which DGF does \emph{not} match or beat
+greedy is the maximum vertex degree, but the gap is small and
+isolated. The best DGF-based MaxDeg ties greedy exactly at
+$t=1.5,\;1.1$ and $1.01$ (so the comparison is $0.00\%$ in three of
+the four regimes), and at $t=1.001$ the best DGF-based MaxDeg
+($\sqrt{t}$-Greedy + DGF, with $122$) is $4.27\%$ above greedy's
+$117$. The average MaxDeg increase across the four regimes is
+$+1.07\%$. We do not currently have a structural explanation for the
+pattern; one possible reading is that descending edge processing
+tends to leave a small number of slightly-high-degree ``hub'' vertices
+through which long-edge detours are routed.
+
+\paragraph{Yao preprocessing: pure speedup for moderate $t$, ineffective for very strict $t$.}
+The Yao graph is far from edge-minimal---$66\,839$ edges at $t=1.5$,
+$224\,442$ at $t=1.1$, $571\,029$ at $t=1.01$, and $465\,760$ at
+$t=1.001$---but it provably contains a valid $t$-spanner, so feeding
+it to DGF is safe. Empirically, the DGF outputs obtained from Yao are,
+for every $(n,t)$ we tested, either identical to the full-input DGF
+output (at $t=1.01$ and $t=1.001$, both produce exactly the same
+edge set and weight) or differ by a handful of edges and a negligible
+amount of weight. So the preprocessing step is, on output quality,
+\emph{essentially neutral}.
+
+On runtime, however, the picture has two regimes. For moderate $t$
+($t\ge 1.01$ in our experiments), Yao reduces the number of candidate
+edges from $\binom{n}{2}$ to a much smaller subset---e.g.\ from about
+$12.5$ million to about $571\,000$ at $n=5000,\;t=1.01$, a $96\%$
+reduction---which, via the recursive binary-search implementation
+(Section~\ref{sec:binary-search}), yields a large practical speedup
+for DGF. For very strict $t$ ($t=1.001$ in our experiments), Yao's
+cones become so narrow that it retains essentially the entire
+complete graph ($93\%$ of $\binom{1000}{2}$), and the speedup
+vanishes: in our implementation Yao + DGF was actually marginally
+\emph{slower} than pure DGF in this regime. The $\sqrt{t}$-Greedy
+preprocessing remains effective in both regimes, since it always
+produces a graph with $O(n)$ edges; at $t=1.001$ it gave roughly an
+order-of-magnitude runtime speedup over pure DGF on the same input,
+again with essentially the same output quality.
+
+\paragraph{Support for the conjectures.}
+The weight ratios over the MST stay bounded and scale with $t$ as
+classical theory predicts: $\rho\approx 2.8$ for $t=1.5$,
+$\rho\approx 10$ for $t=1.1$, $\rho\approx 57$ for $t=1.01$ and
+$\rho\approx 267$ for $t=1.001$, consistent with the $1/(t-1)$
+behavior observed for the greedy spanner. The edge counts remain
+linear in $n$ across all four $(n,t)$ pairs. Taken together, these
+observations give direct empirical support to
+Conjectures~\ref{conj:dgf-edges}, \ref{conj:dgf-weight},
+\ref{conj:min-edges} and~\ref{conj:min-weight}: every edge-minimal
+$t$-spanner we compute---including outputs that are provably
+\emph{not} the greedy spanner---has a linear number of edges and
+weight $O(\wt(\MST))$.
+
+\paragraph{Bottom line.}
+Comparing the best of the DGF family against the classic greedy
+spanner on random Euclidean inputs, DGF-based variants reduce total
+weight by $5.28\%$ on average (and $3.98$--$6.91\%$ across the four
+regimes), reduce edge count by $0.44\%$ on average, and leave the
+maximum vertex degree essentially unchanged ($+1.07\%$ on average,
+zero in three of four regimes, and at most $+4.27\%$ at the strictest
+$t$). The choice of preprocessing affects only runtime, not output
+quality: Yao + DGF is a large practical speedup for moderate $t$ and
+roughly neutral at very strict $t$, $\sqrt{t}$-Greedy + DGF gives an
+order-of-magnitude speedup in both regimes, and pure DGF is the
+fallback that matches them on quality at the highest computational
+cost.
+
+\section{Related Work}
+\label{sec:related-work}
+
+The Descending Greedy Filter (DGF) sits at the intersection of two
+lines of work on geometric spanners: \emph{(i)} constructive algorithms
+that build small or light $t$-spanners directly (greedy, Yao,
+$\Theta$-graphs, WSPD-based, etc.), and \emph{(ii)} structural properties
+characterizing when a $t$-spanner is sparse and/or light (the
+$t$-leapfrog property, existential optimality of greedy). DGF is
+closest in spirit to the classical greedy spanner---it produces an
+edge-minimal $t$-spanner by inspecting one edge at a time---but the
+\emph{direction} of processing is reversed (descending instead of
+ascending), and the algorithm is naturally a \emph{filter}: it can be
+applied to any $t$-spanner, not only the complete graph. A
+comprehensive reference for the whole area is the monograph of
+Narasimhan and Smid~\cite{NS07}. After reviewing the greedy spanner
+and its structural theory
+(Section~\ref{subsec:rw-greedy}), the cone-based and Delaunay families
+(Section~\ref{subsec:rw-cone}), WSPD and light spanners
+(Section~\ref{subsec:rw-wspd}), faster implementations of greedy
+(Section~\ref{subsec:rw-faster}), and edge-minimality, filtering, and
+empirical comparisons (Section~\ref{subsec:rw-minimality}), we close
+with a short summary of how DGF diverges from each of these lines
+(Section~\ref{subsec:rw-we-differ}).
+
+\subsection{Greedy spanners and the leapfrog property}
+\label{subsec:rw-greedy}
+
+The greedy spanner was introduced by Alth\"ofer, Das, Dobkin, Joseph
+and Soares~\cite{ADDJS93}, who sort the edges of a weighted graph in
+non-decreasing order and add an edge $(u,v)$ to the spanner only when
+its current shortest-path distance exceeds $t\cdot|uv|$. They proved
+that for any $k\ge 1$ the resulting $(2k-1)$-spanner has at most
+$n^{1+1/k}$ edges, matching the Erd\H{o}s girth conjecture. DGF is the
+natural reverse: instead of starting from the empty graph and inserting
+short edges first, DGF starts from a $t$-spanner and removes long edges
+first whenever the remaining subgraph is still a $t$-spanner. Both
+algorithms terminate at an edge-minimal $t$-spanner, but on the same
+input they generally produce \emph{different} edge-minimal subgraphs.
+
+The structural side of greedy was developed in two important
+follow-ups. Chandra, Das, Narasimhan and Soares~\cite{CDNS95} gave the
+first sparseness/weight bounds for greedy in Euclidean space, showing
+that the greedy $(1+\varepsilon)$-spanner has $O(n)$ edges and weight
+$O((1/\varepsilon)^d\cdot \wt(\MST))$. Das, Heffernan
+and Narasimhan~\cite{DHN93} introduced the now-standard
+\emph{$t$-leapfrog property} and proved that any edge set satisfying it
+has weight $O(\wt(\MST))$ in 3D Euclidean space; Das,
+Narasimhan and Salowe~\cite{DNS95} extended this to all fixed
+dimensions. The greedy spanner enjoys the leapfrog property by
+construction. DGF is interesting precisely because its outputs are also
+edge-minimal but do \emph{not} automatically satisfy the leapfrog
+property; whether they are nevertheless light is the subject of
+Conjectures~\ref{conj:dgf-weight} and~\ref{conj:min-weight}. Filtser
+and Solomon~\cite{FS20} later proved that greedy is
+\emph{existentially} (near-)optimal for very general input
+families---its worst-case size and weight match those of \emph{any}
+$(1+\varepsilon)$-spanner over the same family, up to lower-order
+factors. DGF can be viewed as an alternative edge-minimal construction
+whose existential and worst-case properties are open, and our empirical
+comparison is in part an attempt to see how close DGF gets to the
+greedy spanner's empirically optimal behavior.
+
+\subsection{Cone-based and Delaunay spanners}
+\label{subsec:rw-cone}
+
+The cone-based family begins with Yao~\cite{Yao82}, who partitioned the
+space around each point into $k$ equal-angle cones and connected each
+point to its nearest neighbor in each cone---the modern \emph{Yao graph
+$Y_k$}. The $\Theta$-graph variant, in which each point is connected to
+the point minimizing the \emph{projected} distance onto the cone
+bisector, was introduced by Clarkson~\cite{Clarkson87} and
+independently by Keil~\cite{Keil88}. Keil and Gutwin~\cite{KG92} gave
+the first clean $t$-spanner analysis for both, and showed that the
+Delaunay triangulation itself has stretch at most
+$(2\pi/3)/\cos(\pi/6)\approx 2.42$; the Delaunay triangulation was
+already known to be a $t$-spanner since Dobkin, Friedman and
+Supowit~\cite{DFS90}. All of these are \emph{deterministic, oblivious}
+constructions: each edge is added based on local cone (or local
+Delaunay) information, with no global check of shortest paths.
+Consequently, Yao/$\Theta$/Delaunay graphs are usually \emph{not}
+edge-minimal---many edges can be removed without violating the
+$t$-spanner property---which is exactly why running DGF on top of a Yao
+graph (as in our experiments) tends to drop edges aggressively.
+
+\subsection{WSPD and light spanners}
+\label{subsec:rw-wspd}
+
+The Well-Separated Pair Decomposition (WSPD) was introduced by Callahan
+and Kosaraju~\cite{CK95}, who showed that for any $s>0$ the $\Theta(n^2)$
+pairs of an $n$-point set in $\mathbb{R}^d$ can be covered by
+$O(s^d\cdot n)$ well-separated pairs, computable in $O(n\log n)$ time.
+The WSPD immediately yields a $(1+\varepsilon)$-spanner with
+$O(n/\varepsilon^d)$ edges by picking one representative edge per
+well-separated pair; however, the canonical WSPD spanner has weight
+$\Omega(\wt(\MST)\cdot\log n)$ unless additional pruning
+is applied, and it is not edge-minimal.
+
+A separate line of work on \emph{light} spanners is concerned with
+total weight rather than edge count; a consolidated exposition of
+WSPD, the leapfrog property, and light-spanner constructions is given
+in Chapter~14 of Narasimhan and Smid~\cite{NS07}. Levcopoulos and
+Lingas~\cite{LL92} gave the first light planar $t$-spanner of weight
+$O((1+1/\varepsilon)\cdot \wt(\MST))$. The first light
+$(1+\varepsilon)$-spanner in arbitrary fixed dimension was given by
+Das, Narasimhan and Salowe~\cite{DNS95} via the leapfrog property,
+followed by a near-quadratic implementation in Das and
+Narasimhan~\cite{DN97}. Borradaile, Le and Wulff-Nilsen~\cite{BLW19}
+extended the optimality of greedy to doubling metrics, and Le and
+Solomon~\cite{LS25} proved tight upper and lower bounds on the size
+and lightness of Euclidean $(1+\varepsilon)$-spanners, showing that
+the greedy spanner achieves them. The DGF conjectures, if proved,
+would place DGF outputs in the same asymptotic regime as the greedy
+spanner.
+
+\subsection{Faster greedy and approximate-greedy spanners}
+\label{subsec:rw-faster}
+
+Because the textbook greedy spanner runs in $O(n^3 \log n)$ time
+na\"ively, a substantial line of work has focused on faster
+implementations. Gudmundsson, Levcopoulos and Narasimhan~\cite{GLN02}
+gave the first $O(n\log n)$-time algorithm producing an
+\emph{approximate-greedy} spanner with $O(n)$ edges, constant degree,
+and weight $O(\wt(\MST))$. The exact greedy spanner was
+sped up by Bose, Carmi, Farshi, Maheshwari and Smid~\cite{BCFMS10} to
+$O(n^2\log n)$ time using $O(n^2)$ space. Alewijnse, Bouts, ten~Brink
+and Buchin~\cite{ABBB15} gave the first $O(n)$-space algorithm with
+$O(n^2\log^2 n)$ time, computing the greedy spanner on point sets with
+up to a million vertices. Our recursive binary-search variant of DGF
+(Section~\ref{sec:binary-search}) is in the same spirit as these
+implementation-engineering results: it batches edges and uses a
+logarithmic number of APSP ``rounds'' to certify many edges at once.
+
+\subsection{Edge-minimality, filtering, and empirical comparisons}
+\label{subsec:rw-minimality}
+
+We are not aware of any prior work that proposes the descending-order
+filter algorithm we study here. DGF can be viewed as the natural
+spanner-analogue of the reverse-delete algorithm for spanning trees,
+with ``connected'' replaced by ``$t$-spanner of the input.'' The
+complexity of computing the smallest $t$-spanner is well known to be
+NP-hard: Cai~\cite{Cai94} showed that finding a minimum-cardinality
+$t$-spanner is NP-complete for every fixed $t\ge 2$ even on
+bounded-degree graphs, and Kortsarz~\cite{Kortsarz01} strengthened
+this to polylogarithmic inapproximability: for every fixed $t\ge 5$
+and every $\delta>0$, approximating the minimum-cardinality $t$-spanner
+within factor $(\log n)^{1-\delta}$ is NP-hard. Sigurd and
+Zachariasen~\cite{SZ04} gave an ILP-based exact algorithm for the
+\emph{minimum-weight} $t$-spanner problem and observed that on
+moderate-sized instances the greedy spanner is consistently within a
+few percent of the optimum total weight. It is important to note
+that minimum-weight and edge-minimal are \emph{different} objectives:
+every minimum-weight $t$-spanner is edge-minimal, but the converse
+fails, and a minimum-cardinality $t$-spanner need not be edge-minimal
+either. DGF targets the polynomial-time edge-minimal objective, which
+lies strictly between ``any $t$-spanner'' and the NP-hard
+minimum-cardinality / minimum-weight objectives.
+
+The notion of edge-minimality itself is implicit in the
+leapfrog literature~\cite{DHN93,DNS95}: every leapfrog-property edge
+set is edge-minimal in a strong sense, but the converse is not true.
+From this perspective, DGF is a natural stress test of the conjecture
+that minimality alone (without leapfrog) suffices for linear edge
+count and $O(\wt(\MST))$ weight.
+
+On the empirical side, Farshi and Gudmundsson~\cite{FG09} carried out
+the first systematic comparison of the standard constructions (greedy,
+Yao, $\Theta$, ordered $\Theta$, sink-spanner, WSPD, etc.) on random and
+clustered point sets in the plane, concluding that the greedy spanner
+dominates everything else on every quality metric except construction
+time. Alewijnse et al.~\cite{ABBB15} extended these experiments to
+point sets of up to $10^6$ vertices, confirming the same pattern. Our
+experiments fit into this tradition, with the new axis being not
+``constructive'' comparisons but the question of how aggressively a
+filter post-pass can prune existing spanners.
+
+\subsection{Summary: how DGF differs from the closest prior work}
+\label{subsec:rw-we-differ}
+
+Against the backdrop above, the contributions of this paper can be
+located against four closely related lines in a single glance:
+
+\begin{enumerate}
+    \item \emph{Vs.\ the classical greedy spanner}~\cite{ADDJS93,CDNS95}:
+        the greedy algorithm processes edges in ascending order of
+        length; DGF processes them in descending order. Both produce
+        edge-minimal $t$-spanners, but on the same input they in
+        general output different subgraphs. Our experiments show that
+        DGF-based outputs have edge counts matching greedy to within
+        a fraction of a percent but total weight that is consistently
+        $4$--$7\%$ lower on random Euclidean instances.
+    \item \emph{Vs.\ faster greedy implementations}~\cite{BCFMS10,ABBB15}:
+        those papers compute the \emph{specific} greedy spanner
+        faster; DGF and its filtering variant produce an
+        \emph{arbitrary} edge-minimal $t$-spanner, with the recursive
+        binary-search implementation (Section~\ref{sec:binary-search})
+        reducing $\APSP$ calls from $\Theta(m)$ to $O(k\log m)$.
+    \item \emph{Vs.\ the minimum-weight $t$-spanner line}~\cite{SZ04,Cai94,Kortsarz01}:
+        those works target $\mathsf{NP}$-hard optimization problems
+        (minimum cardinality or minimum weight) and either use
+        exponential-time ILPs~\cite{SZ04} or prove
+        inapproximability~\cite{Cai94,Kortsarz01}. Edge-minimality is
+        a strictly weaker, polynomial-time attainable objective that
+        still rules out ``wasteful'' edges.
+    \item \emph{Vs.\ existential-optimality results}~\cite{FS20,LS25}:
+        these prove that \emph{the} greedy spanner is (near-)optimal
+        in a worst-case sense. Our conjectures
+        (Conjectures~\ref{conj:min-edges} and~\ref{conj:min-weight}),
+        if proved, would extend the same asymptotic guarantees to
+        \emph{every} edge-minimal $t$-spanner, of which the greedy
+        spanner and the DGF spanners are two particular instances.
+\end{enumerate}
+
+\section{Conclusion and Open Problems}
+\label{sec:open-problems}
+
+We introduced the Descending Greedy Filter, a construction dual to the
+classical greedy spanner, together with a general filtering procedure
+that turns any $t$-spanner into an edge-minimal one. We gave a
+recursive binary-search implementation that reduces the number of
+$\APSP$ calls from $\Theta(m)$ to $O(k\log m)$. Empirically, on random
+point sets with $n\in\{1000,\,2000,\,5000\}$ and
+$t\in\{1.001,\,1.01,\,1.1,\,1.5\}$, DGF and its variants produce
+spanners whose edge counts match the greedy spanner to within a
+fraction of a percent while using $4$--$7\%$ less total weight. We
+further showed that the choice of preprocessing affects only runtime
+and not output quality: running DGF on top of a Yao graph is a large
+practical speedup for moderate $t$ but loses its advantage at very
+strict $t$ (because Yao itself ceases to be sparse), while the
+$\sqrt{t}$-Greedy preprocessor remains effective in both regimes.
+
+The main questions left open by this work are the four conjectures of
+Section~\ref{sec:conjectures}. We repeat them here in order of
+decreasing confidence:
+
+\begin{enumerate}
+  \item \textbf{Sparsity of DGF}
+        (Conjecture~\ref{conj:dgf-edges}). Does the DGF output on every
+        $n$-point planar input have $O(n)$ edges? Our experiments show
+        the number of edges is consistently below $2n$ for the tested
+        parameters.
+  \item \textbf{Sparsity of every minimal $t$-spanner in the plane}
+        (Conjecture~\ref{conj:min-edges}). Does \emph{every} edge-minimal
+        planar $t$-spanner have $O(n)$ edges? This is the strongest
+        form of the question and, if true, would extend Filtser and
+        Solomon's~\cite{FS20} existential-optimality result from the
+        greedy spanner to the entire class of edge-minimal spanners.
+  \item \textbf{Weight of DGF}
+        (Conjecture~\ref{conj:dgf-weight}). Is
+        $\wt(E_f) = O(\wt(\MST(P)))$ for the DGF output? The
+        descending-order processing appears to enforce a
+        leapfrog-like property on the output, but we do not have a
+        proof.
+  \item \textbf{Weight of every minimal $t$-spanner}
+        (Conjecture~\ref{conj:min-weight}). This is the weakest of the
+        four and may in fact be false: the classical weight bound for
+        greedy~\cite{CDNS95,DHN93,DNS95} rests on the $t$-leapfrog
+        property, which is not implied by edge-minimality alone. A
+        counterexample---a minimal $t$-spanner on $n$ points with
+        weight $\omega(\wt(\MST))$---would be as interesting as a
+        proof.
+\end{enumerate}
+
+A further concrete direction is to replace the $O(k\log m)$ $\APSP$ calls
+of the binary-search implementation by a genuinely near-linear-time
+algorithm (analogous to~\cite{GLN02,BCFMS10,ABBB15} in the greedy
+setting) that incrementally maintains the shortest-path structure as
+edges are removed. Finally, it would be interesting to combine DGF
+with a non-trivial \emph{starting} spanner (a $\Theta$-graph or a WSPD
+spanner) and study the distribution of edge-minimal outputs obtained
+by different starting points.
+
+% Bibliography is generated by BibTeX from references.bib.
+% Choose the .bst that matches the target venue; see bibliography_guide.md.
+%   plainurl   -- LIPIcs venues (SoCG, ESA, ICALP, ITCS, ...). Ships with
+%                 the Dagstuhl LIPIcs class; not in stock TeX Live.
+%   siamplain  -- SIAM venues (SODA, SICOMP, SIDMA). Ships with siamart.
+%   plain      -- builtin fallback for local draft compilation.
+\bibliographystyle{plainurl}
+% \bibliographystyle{siamplain}
+% \bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

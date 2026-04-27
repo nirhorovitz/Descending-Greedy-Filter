@@ -261,10 +261,69 @@ mutable struct DGFStats
 end
 DGFStats() = DGFStats(0, 0.0, 0, 0)
 
+"""
+Process `edge_list` one edge at a time. Assumes all edges are currently removed.
+Restores them all, then for each edge tries removing it; if a violation arises,
+restores it. This is the classic greedy filter loop, used as a fallback once
+the binary search has cleared the bulk of the edges.
+"""
+function dgf_process_one_by_one!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
+                                  cleared::Ref{Int}, decided::Ref{Int}, total::Int,
+                                  stats::DGFStats, depth::Int)
+    # All edges in edge_list are currently removed; restore them first
+    for (u, v, w) in edge_list
+        dgf_add_edge!(ctx, u, v, w)
+    end
+
+    pct_start = round(100.0 * decided[] / total, digits=1)
+    println("    [dgf] depth=$depth: switching to one-by-one for $(length(edge_list)) remaining edges (decided=$(decided[])/$total = $(pct_start)%, cleared=$(cleared[]))")
+
+    removed = 0
+    log_every = max(1, length(edge_list) ÷ 20)
+    for (idx, (u, v, w)) in enumerate(edge_list)
+        dgf_rem_edge!(ctx, u, v)
+
+        # Quick check: only the (u,v) own pair needs to be verified for a single-edge removal
+        d_uv = single_pair_distance(ctx, u, v)
+        if d_uv > ctx.t_dist[u, v] + 1e-9
+            has_violation = true
+            stats.quick_hits += 1
+        else
+            stats.quick_misses += 1
+            t_apsp = time_ns()
+            has_violation = any_violation(ctx)
+            apsp_ms = (time_ns() - t_apsp) / 1e6
+            stats.apsp_count += 1
+            stats.apsp_total_ms += apsp_ms
+        end
+
+        if has_violation
+            dgf_add_edge!(ctx, u, v, w)
+        else
+            removed += 1
+            cleared[] += 1
+        end
+        decided[] += 1
+
+        if idx % log_every == 0 || idx == length(edge_list)
+            pct = round(100.0 * decided[] / total, digits=1)
+            println("    [dgf-1by1] processed $idx/$(length(edge_list)) (removed=$removed), total decided $(decided[])/$total ($(pct)%)")
+        end
+    end
+    return removed
+end
+
 function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
-                      cleared::Ref{Int}, total::Int, stats::DGFStats, depth::Int=0)
+                      cleared::Ref{Int}, decided::Ref{Int}, total::Int,
+                      stats::DGFStats, depth::Int=0)
     if isempty(edge_list)
         return 0
+    end
+
+    # Once 70% of edges have been decided (cleared or restored as necessary),
+    # switch from binary search to one-by-one processing.
+    if total > 0 && decided[] >= 0.7 * total
+        return dgf_process_one_by_one!(ctx, edge_list, cleared, decided, total, stats, depth)
     end
 
     # Fast pre-check: test removed edges' own pairs before full APSP
@@ -282,10 +341,11 @@ function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
     if !has_violation
         # All edges in this batch are removable
         cleared[] += length(edge_list)
+        decided[] += length(edge_list)
         if length(edge_list) >= 4
-            pct = round(100.0 * cleared[] / total, digits=1)
+            pct = round(100.0 * decided[] / total, digits=1)
             avg_ms = stats.apsp_count > 0 ? round(stats.apsp_total_ms / stats.apsp_count, digits=1) : 0.0
-            println("    [dgf] depth=$depth: cleared $(length(edge_list)) edges, total $(cleared[])/$total edges cleared ($(pct)%) [apsp=$(stats.apsp_count), avg=$(avg_ms)ms, quick_hits=$(stats.quick_hits)]")
+            println("    [dgf] depth=$depth: cleared $(length(edge_list)) edges, total decided $(decided[])/$total ($(pct)%, cleared=$(cleared[])) [apsp=$(stats.apsp_count), avg=$(avg_ms)ms, quick_hits=$(stats.quick_hits)]")
         end
         return length(edge_list)
     end
@@ -294,6 +354,7 @@ function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
     if length(edge_list) == 1
         u, v, w = edge_list[1]
         dgf_add_edge!(ctx, u, v, w)
+        decided[] += 1
         return 0
     end
 
@@ -310,13 +371,13 @@ function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
     for (u, v, _) in first_half
         dgf_rem_edge!(ctx, u, v)
     end
-    r1 = dgf_bisect!(ctx, first_half, cleared, total, stats, depth + 1)
+    r1 = dgf_bisect!(ctx, first_half, cleared, decided, total, stats, depth + 1)
 
     # Process second half
     for (u, v, _) in second_half
         dgf_rem_edge!(ctx, u, v)
     end
-    r2 = dgf_bisect!(ctx, second_half, cleared, total, stats, depth + 1)
+    r2 = dgf_bisect!(ctx, second_half, cleared, decided, total, stats, depth + 1)
 
     return r1 + r2
 end
@@ -345,8 +406,9 @@ function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Flo
     end
 
     cleared = Ref(0)
+    decided = Ref(0)
     stats = DGFStats()
-    removed = dgf_bisect!(ctx, edge_list, cleared, n_before, stats)
+    removed = dgf_bisect!(ctx, edge_list, cleared, decided, n_before, stats)
     avg_ms = stats.apsp_count > 0 ? round(stats.apsp_total_ms / stats.apsp_count, digits=1) : 0.0
     println("    [dgf] done: removed=$removed, remaining=$(n_before - removed)")
     println("    [dgf-profile] apsp_count=$(stats.apsp_count), apsp_total=$(round(stats.apsp_total_ms / 1000, digits=1))s, avg=$(avg_ms)ms/apsp, quick_hits=$(stats.quick_hits), quick_misses=$(stats.quick_misses)")

@@ -376,6 +376,63 @@ $|E| \;=\; O(n)$.
 $\wt(E) \;=\; O\!\bigl(\wt(\MST(P))\bigr)$.
 \end{conjecture}
 
+\subsection{A conjecture toward Conjecture~\ref{conj:min-weight}}
+\label{subsec:toward-min-weight}
+We now state an additional conjecture which, if established, we believe
+would imply (or substantially advance a proof of)
+Conjecture~\ref{conj:min-weight}.
+
+%% The setup, notation, construction and claim below were transcribed
+%% from a whiteboard sketch; please double-check the definitions and
+%% the form of $T_{pq}$ before publication.
+
+\paragraph{Setup.}
+Let $E_Z = \binom{P}{2}$ denote the edge set of the complete graph on
+$P$, and let $E \subseteq E_Z$ be a minimal $t$-spanner of $P$ in the
+sense of Definition~\ref{def:minimal}. For a subset $F \subseteq E_Z$
+and points $u,v \in P$, write $\delta_F(u,v)$ for the shortest-path
+distance from $u$ to $v$ in the weighted graph $(P,F)$ (using Euclidean
+edge lengths).
+
+\paragraph{Notation.}
+For each edge $(p,q) \in E$, define
+\begin{align*}
+  C_{pq} &\;=\; \Bigl\{(a,b) \in E \;\Bigm|\;
+    \delta_{E\setminus\{(a,b)\}}(a,b) > t\,|ab|,\
+    \text{$(p,q)$ is a ``bottleneck'' of $(a,b)$}\Bigr\}, \\
+  (a,b)_{pq} &\;=\; \arg\min_{(a,b)\,\in\, C_{pq}} |ab|, \\
+  T_{pq} &\;=\; \delta_{E_Z}(a,p) \;+\; |pq| \;+\; \delta_{E_Z}(q,b),
+  \qquad \text{where $(a,b)=(a,b)_{pq}$.}
+\end{align*}
+%% NOTE: ``$(p,q)$ is a bottleneck of $(a,b)$'' was written informally
+%% on the board; the intended meaning (to verify) is that every
+%% $t$-path between $a$ and $b$ in $E$ must use the edge $(p,q)$.
+
+\paragraph{Construction of $E^*$.}
+Initialize $E^* \gets \emptyset$. For every $(p,q) \in E$, add the
+shortest path realizing $T_{pq}$ to $E^*$, i.e.\
+$E^* \gets E^* \cup T_{pq}$.
+
+\begin{conjecture}[auxiliary conjecture toward weight of any minimal $t$-spanner]
+\label{conj:toward-min-weight}
+With the construction above,
+\[
+  \wt(E^*) \;\leq\; 2\,\wt(\MST(P)).
+\]
+\end{conjecture}
+
+\paragraph{Why this would help.}
+%% TODO: write up the implication. Whiteboard hint:
+%% ``Proof: for every $T_i, T_j \in E^*$ \ldots\ MST \ldots'',
+%% i.e.\ a pairwise / charging argument against the MST.
+If Conjecture~\ref{conj:toward-min-weight} holds, then every minimal
+$t$-spanner $E$ admits a witness collection $\{T_{pq}\}_{(p,q)\in E}$
+whose total weight is at most $2\,\wt(\MST(P))$; combined with the
+fact that each edge $(p,q)\in E$ contributes its own length $|pq|$ to
+some $T_{pq}$, this would yield
+$\wt(E) = O\!\bigl(\wt(\MST(P))\bigr)$ and hence
+Conjecture~\ref{conj:min-weight}.
+
 \subsection{Discussion}
 Conjectures~\ref{conj:min-edges} and~\ref{conj:min-weight} strictly
 generalize Conjectures~\ref{conj:dgf-edges} and~\ref{conj:dgf-weight}

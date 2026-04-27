@@ -386,7 +386,8 @@ end
 """
 Apply DGF to graph `g` in-place. Returns number of edges removed.
 """
-function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Float64)
+function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Float64;
+                     one_by_one_only::Bool=false)
     n = nv(g)
     ctx = DGFContext(n, dist_matrix, t)
 
@@ -399,7 +400,8 @@ function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Flo
     sort!(edge_list, by=x -> x[3], rev=true)  # descending
 
     n_before = length(edge_list)
-    println("    [dgf] starting: $(n_before) edges, n=$n, t=$t, threads=$(Threads.nthreads())")
+    mode = one_by_one_only ? "one-by-one only" : "binary search → 1by1 at 70%"
+    println("    [dgf] starting: $(n_before) edges, n=$n, t=$t, threads=$(Threads.nthreads()), mode=$mode")
 
     # Remove all edges
     for (u, v, _) in edge_list
@@ -409,7 +411,11 @@ function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Flo
     cleared = Ref(0)
     decided = Ref(0)
     stats = DGFStats()
-    removed = dgf_bisect!(ctx, edge_list, cleared, decided, n_before, stats)
+    removed = if one_by_one_only
+        dgf_process_one_by_one!(ctx, edge_list, cleared, decided, n_before, stats, 0)
+    else
+        dgf_bisect!(ctx, edge_list, cleared, decided, n_before, stats)
+    end
     avg_ms = stats.apsp_count > 0 ? round(stats.apsp_total_ms / stats.apsp_count, digits=1) : 0.0
     println("    [dgf] done: removed=$removed, remaining=$(n_before - removed)")
     println("    [dgf-profile] apsp_count=$(stats.apsp_count), apsp_total=$(round(stats.apsp_total_ms / 1000, digits=1))s, avg=$(avg_ms)ms/apsp, quick_hits=$(stats.quick_hits), quick_misses=$(stats.quick_misses)")
@@ -454,23 +460,81 @@ function greedy_on_edges(points::Vector{Point2D}, t::Float64,
 end
 
 """
+Check whether `g` is a valid t-spanner over every pair in P × P.
+Runs threaded SSSP from each source and verifies d_g(s, v) <= t * |s - v| + ε.
+Returns `(valid, src_failing, dst_failing)` (latter two are 0 when valid).
+"""
+function is_valid_t_spanner(g::SimpleWeightedGraph, points::Vector{Point2D}, t::Float64;
+                             tol::Float64 = 1e-9)
+    n = length(points)
+    n <= 1 && return (true, 0, 0)
+    invalid = Threads.Atomic{Bool}(false)
+    fail_src = Threads.Atomic{Int}(0)
+    fail_dst = Threads.Atomic{Int}(0)
+
+    Threads.@threads :static for src_v in 1:n
+        invalid[] && continue
+        dij = dijkstra_shortest_paths(g, src_v)
+        @inbounds for dst_v in 1:n
+            src_v == dst_v && continue
+            invalid[] && break
+            d_geo = norm(points[src_v] - points[dst_v])
+            limit = t * d_geo + tol
+            if dij.dists[dst_v] > limit
+                Threads.atomic_xchg!(invalid, true)
+                Threads.atomic_xchg!(fail_src, src_v)
+                Threads.atomic_xchg!(fail_dst, dst_v)
+                break
+            end
+        end
+    end
+    return (!invalid[], fail_src[], fail_dst[])
+end
+
+"""
 Greedy spanner with a tqdm-style progress bar over candidate edges.
-Functionally equivalent to `Algorithms.run_algorithm(GreedySpanner(), instance)`.
+Functionally equivalent to `Algorithms.run_algorithm(GreedySpanner(), instance)`,
+plus periodic APSP checks at 10/20/.../90% of decided edges that allow early
+termination once the graph is already a valid t-spanner over P × P.
 """
 function greedy_with_progress(points::Vector{Point2D}, t::Float64;
-                              label::String = "greedy")
+                              label::String = "greedy",
+                              early_check::Bool = true)
     n = length(points)
     edges = Algorithms.get_all_edges(n, points)  # already sorted ascending by distance
     g = SimpleWeightedGraph(n)
-    prog = Progress(length(edges); desc="    [$label t=$(round(t, digits=4))] ",
+    n_edges = length(edges)
+    prog = Progress(n_edges; desc="    [$label t=$(round(t, digits=4))] ",
                     showspeed=true, barlen=30, dt=0.5)
-    for (u, v, dist) in edges
+
+    next_check_pct = 10
+    for (i, (u, v, dist)) in enumerate(edges)
         limit = t * dist
         d_g = Algorithms.get_graph_distance(g, u, v, points, limit)
         if d_g > limit
             add_edge!(g, u, v, dist)
         end
         next!(prog; showvalues=[(:edges_kept, ne(g))])
+
+        if early_check && next_check_pct <= 90
+            pct_done = 100.0 * i / n_edges
+            if pct_done >= next_check_pct
+                println()
+                println("    [$label] $(round(pct_done, digits=2))% of edges decided ($(ne(g)) kept) — running APSP early-stop check...")
+                t0 = time()
+                valid, fs, fd = is_valid_t_spanner(g, points, t)
+                elapsed = time() - t0
+                if valid
+                    finish!(prog)
+                    skipped = n_edges - i
+                    println("    [$label] valid t-spanner at $(round(pct_done, digits=2))% (APSP took $(round(elapsed, digits=2))s) — early stop, skipped $skipped candidate edges.")
+                    return g
+                else
+                    println("    [$label] not yet valid (APSP took $(round(elapsed, digits=2))s, first violation src=$fs dst=$fd), continuing.")
+                end
+                next_check_pct += 10
+            end
+        end
     end
     finish!(prog)
     return g
@@ -509,7 +573,7 @@ function run_sqrt_greedy_dgf(instance::SpannerInstance, dist_matrix::Matrix{Floa
     g = greedy_with_progress(instance.points, sqrt_t; label="sqrt(t)-greedy")
     edges_after_greedy = ne(g)
 
-    removed = apply_dgf!(g, dist_matrix, t)
+    removed = apply_dgf!(g, dist_matrix, t; one_by_one_only=true)
 
     runtime = time() - start_time
     stats = Dict{Symbol,Any}(:sqrt_t => sqrt_t,

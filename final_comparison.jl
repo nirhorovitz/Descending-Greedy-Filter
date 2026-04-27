@@ -279,8 +279,9 @@ function dgf_process_one_by_one!(ctx::DGFContext, edge_list::Vector{Tuple{Int,In
     pct_start = round(100.0 * decided[] / total, digits=1)
     println("    [dgf] depth=$depth: switching to one-by-one for $(length(edge_list)) remaining edges (decided=$(decided[])/$total = $(pct_start)%, cleared=$(cleared[]))")
 
+    prog = Progress(length(edge_list); desc="    [dgf-1by1] ", showspeed=true,
+                    barlen=30, dt=0.5)
     removed = 0
-    log_every = max(1, length(edge_list) ÷ 20)
     for (idx, (u, v, w)) in enumerate(edge_list)
         dgf_rem_edge!(ctx, u, v)
 
@@ -306,11 +307,15 @@ function dgf_process_one_by_one!(ctx::DGFContext, edge_list::Vector{Tuple{Int,In
         end
         decided[] += 1
 
-        if idx % log_every == 0 || idx == length(edge_list)
-            pct = round(100.0 * decided[] / total, digits=1)
-            println("    [dgf-1by1] processed $idx/$(length(edge_list)) (removed=$removed), total decided $(decided[])/$total ($(pct)%)")
-        end
+        next!(prog; showvalues=[
+            (:removed, removed),
+            (:kept,    idx - removed),
+            (:decided, "$(decided[])/$total"),
+            (:apsp,    stats.apsp_count),
+            (Symbol("quick_hits"), stats.quick_hits),
+        ])
     end
+    finish!(prog)
     return removed
 end
 

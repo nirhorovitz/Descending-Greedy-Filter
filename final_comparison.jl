@@ -16,6 +16,7 @@ using LinearAlgebra
 using Graphs
 using SimpleWeightedGraphs
 using JLD2
+using ProgressMeter
 
 # =============================================================================
 # DGF (Descending Greedy Filter) with recursive binary search
@@ -433,17 +434,45 @@ end
 # =============================================================================
 
 function greedy_on_edges(points::Vector{Point2D}, t::Float64,
-                          candidate_edges::Vector{Tuple{Int,Int,Float64}})
+                          candidate_edges::Vector{Tuple{Int,Int,Float64}};
+                          label::String = "greedy_on_edges")
     n = length(points)
     sorted_edges = sort(candidate_edges, by=x -> x[3])  # ascending by distance
     g = SimpleWeightedGraph(n)
+    prog = Progress(length(sorted_edges); desc="    [$label] ", showspeed=true,
+                    barlen=30, dt=0.5)
     for (u, v, dist) in sorted_edges
         limit = t * dist
         d_g = Algorithms.get_graph_distance(g, u, v, points, limit)
         if d_g > limit
             add_edge!(g, u, v, dist)
         end
+        next!(prog; showvalues=[(:edges_kept, ne(g))])
     end
+    finish!(prog)
+    return g
+end
+
+"""
+Greedy spanner with a tqdm-style progress bar over candidate edges.
+Functionally equivalent to `Algorithms.run_algorithm(GreedySpanner(), instance)`.
+"""
+function greedy_with_progress(points::Vector{Point2D}, t::Float64;
+                              label::String = "greedy")
+    n = length(points)
+    edges = Algorithms.get_all_edges(n, points)  # already sorted ascending by distance
+    g = SimpleWeightedGraph(n)
+    prog = Progress(length(edges); desc="    [$label t=$(round(t, digits=4))] ",
+                    showspeed=true, barlen=30, dt=0.5)
+    for (u, v, dist) in edges
+        limit = t * dist
+        d_g = Algorithms.get_graph_distance(g, u, v, points, limit)
+        if d_g > limit
+            add_edge!(g, u, v, dist)
+        end
+        next!(prog; showvalues=[(:edges_kept, ne(g))])
+    end
+    finish!(prog)
     return g
 end
 
@@ -466,9 +495,9 @@ end
 function run_greedy(instance::SpannerInstance)
     println("  -> Running Greedy...")
     start_time = time()
-    res = Algorithms.run_algorithm(Algorithms.GreedySpanner(), instance)
+    g = greedy_with_progress(instance.points, instance.t; label="greedy")
     runtime = time() - start_time
-    return SpannerResult("Greedy", res.graph, runtime, Dict{Symbol,Any}())
+    return SpannerResult("Greedy", g, runtime, Dict{Symbol,Any}())
 end
 
 function run_sqrt_greedy_dgf(instance::SpannerInstance, dist_matrix::Matrix{Float64})
@@ -477,9 +506,7 @@ function run_sqrt_greedy_dgf(instance::SpannerInstance, dist_matrix::Matrix{Floa
     println("  -> Running sqrt(t)-Greedy + DGF  [sqrt(t)=$(round(sqrt_t, digits=4))]...")
     start_time = time()
 
-    sqrt_instance = SpannerInstance(instance.points, instance.w_func, sqrt_t)
-    greedy_res = Algorithms.run_algorithm(Algorithms.GreedySpanner(), sqrt_instance)
-    g = deepcopy(greedy_res.graph)
+    g = greedy_with_progress(instance.points, sqrt_t; label="sqrt(t)-greedy")
     edges_after_greedy = ne(g)
 
     removed = apply_dgf!(g, dist_matrix, t)
@@ -551,7 +578,7 @@ function run_sqrt_yao_sqrt_greedy(instance::SpannerInstance)
     edges_after_yao = length(yao_edges)
 
     # Step 2: Greedy with sqrt(t) on Yao edges only
-    g = greedy_on_edges(instance.points, sqrt_t, yao_edges)
+    g = greedy_on_edges(instance.points, sqrt_t, yao_edges; label="sqrt(t)-greedy-on-yao")
 
     runtime = time() - start_time
     stats = Dict{Symbol,Any}(:sqrt_t => sqrt_t,

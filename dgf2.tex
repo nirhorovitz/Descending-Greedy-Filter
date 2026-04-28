@@ -28,7 +28,7 @@
 \DeclareMathOperator{\MST}{MST}
 \DeclareMathOperator{\APSP}{APSP}
 
-\title{Descending Greedy Filter:\\Light Spanners via Edge-Minimality}
+\title{Descending Greedy Filter}
 \author{P.~Carmi, N.~Horovitz, Y.~Yashuk}
 \date{April 2026}
 
@@ -37,6 +37,12 @@
 \maketitle
 
 \begin{abstract}
+We introduce a new approach to constructing geometric $t$-spanners based on a simple filtering principle. As part of this framework, we formalize the notion of \emph{minimal} $t$-spanners—graphs in which every edge is essential for preserving the stretch guarantee—and present the \emph{Descending Greedy Filter} (DGF), which produces such spanners.
+We conjecture that all minimal $t$-spanners in the plane, for any fixed $t>1$, have $O(n)$ edges and total weight proportional to that of the minimum spanning tree.
+
+Experimental results show that DGF produces spanners with essentially the same number of edges as the classical greedy construction, while consistently achieving $4$--$7\%$ lower total weight, without loss of stretch. To the best of our knowledge, this is the first construction that empirically outperforms the greedy spanner in total weight on random point sets.
+
+\old{
 We present a new construction of geometric spanners, which we call the
 \emph{Descending Greedy Filter} (DGF). Starting from the complete graph,
 DGF examines edges in \emph{non-ascending} order of length and discards
@@ -56,6 +62,8 @@ $t\in\{1.001,\,1.01,\,1.1,\,1.5\}$ show that DGF and its variants
 produce spanners whose edge count matches the classical greedy spanner
 to within a fraction of a percent while using $4$--$7\%$ less total
 weight, with the exact stretch preserved.
+} % end old
+
 \end{abstract}
 
 \section{Introduction}

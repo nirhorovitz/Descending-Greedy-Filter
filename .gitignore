@@ -1,0 +1,44 @@
+# macOS
+.DS_Store
+
+# Experiment outputs (large generated artifacts)
+results/
+*.jld2
+
+# Julia
+Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+deps/deps.jl
+/.julia/
+LocalPreferences.toml
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.log
+*.lot
+*.nav
+*.out
+*.run.xml
+*.snm
+*.synctex.gz
+*.toc
+*.vrb
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*~
+
+# Python (in case helper scripts produce these)
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

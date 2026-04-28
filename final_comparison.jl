@@ -434,14 +434,16 @@ function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Flo
         dgf_process_one_by_one!(ctx, edge_list, cleared, decided, n_before, stats, 0)
     else
         leftover = Tuple{Int,Int,Float64}[]
-        r_bisect = dgf_bisect!(ctx, edge_list, cleared, decided, n_before, stats,
-                                bisect_until_pct, leftover)
-        # Commit the in-place [dgf] bisect line before the 1by1 phase / summary.
+        removed_bs = dgf_bisect!(ctx, edge_list, cleared, decided, n_before,
+                                  stats, bisect_until_pct, leftover, 0)
+        # Ensure the in-place [dgf] line is committed before the next phase logs.
         println()
-        r_one = isempty(leftover) ? 0 :
+        removed_1by1 = isempty(leftover) ? 0 :
             dgf_process_one_by_one!(ctx, leftover, cleared, decided, n_before, stats, 0)
-        r_bisect + r_one
+        removed_bs + removed_1by1
     end
+    # Ensure the in-place [dgf] line (if any) is committed before final summary.
+    println()
     avg_ms = stats.apsp_count > 0 ? round(stats.apsp_total_ms / stats.apsp_count, digits=1) : 0.0
     println("    [dgf] done: removed=$removed, remaining=$(n_before - removed)")
     println("    [dgf-profile] apsp_count=$(stats.apsp_count), apsp_total=$(round(stats.apsp_total_ms / 1000, digits=1))s, avg=$(avg_ms)ms/apsp, quick_hits=$(stats.quick_hits), quick_misses=$(stats.quick_misses)")
@@ -680,6 +682,43 @@ function run_sqrt_yao_sqrt_greedy(instance::SpannerInstance)
 end
 
 # =============================================================================
+# Per-algorithm caching (resume support)
+# =============================================================================
+
+"""
+Run `runner()` to compute a `SpannerResult`, then enrich it with stats and
+persist it under `algo_dir/<slug>.jld2`. If a cached file already exists,
+load and return it instead — letting the experiment resume across runs.
+"""
+function run_or_load_algo(name::String, slug::String, algo_dir::String,
+                            instance::SpannerInstance, runner::Function)
+    path = joinpath(algo_dir, "$(slug).jld2")
+    if isfile(path)
+        try
+            data = JLD2.load(path)
+            res = data["result"]
+            println("  -> [cached] $name loaded from $path")
+            return res
+        catch err
+            println("  -> [cached] failed to load $path ($(err)); recomputing.")
+        end
+    end
+
+    res = runner()
+    res = Analysis.compute_stats(instance, res)
+
+    edge_list = extract_edge_list(res.graph)
+    JLD2.save(path, Dict(
+        "result" => res,
+        "edge_list" => edge_list,
+        "algorithm_name" => res.algorithm_name,
+        "slug" => slug,
+    ))
+    println("     [save] $name -> $path")
+    return res
+end
+
+# =============================================================================
 # Table drawing (unchanged)
 # =============================================================================
 
@@ -789,52 +828,73 @@ function main()
 
     println("Running algorithm comparison with N=$N, t set=$(t_values), seed=$seed, dgf=$(run_dgf_algo)")
 
-    # Generate points (use generate_random_instance for point layout, then discard weights)
-    base_instance = generate_random_instance(N, t_values[1]; seed=seed)
-    points = base_instance.points
+    base_dir = joinpath(@__DIR__, "results")
+    root_output_dir = joinpath(base_dir, "n=$(N)_t=$(t_values[1])")
+    mkpath(root_output_dir)
+
+    # Points are deterministic from (N, seed). Save them up front so the
+    # experiment can be resumed (and so any cached per-algorithm results are
+    # tied to a known point set).
+    points_path = joinpath(root_output_dir, "points.jld2")
+    points = if isfile(points_path)
+        cached = JLD2.load(points_path)
+        cached_points = cached["points"]
+        cached_seed = get(cached, "seed", seed)
+        cached_N = get(cached, "N", length(cached_points))
+        if cached_N != N || cached_seed != seed
+            error("Cached points at $points_path were generated with " *
+                  "(N=$cached_N, seed=$cached_seed) but this run is " *
+                  "(N=$N, seed=$seed). Use a different output dir or delete the file.")
+        end
+        println("Loaded cached points from $points_path  (N=$cached_N, seed=$cached_seed)")
+        cached_points
+    else
+        base_instance = generate_random_instance(N, t_values[1]; seed=seed)
+        pts = base_instance.points
+        JLD2.save(points_path, Dict("points" => pts, "N" => N, "seed" => seed))
+        println("Saved points to $points_path")
+        pts
+    end
+
     ones_w = MatrixWFunc(ones(N, N))
 
     println("Precomputing distance matrix...")
     dist_matrix = compute_dist_matrix(points)
 
-    base_dir = joinpath(@__DIR__, "results")
-    root_output_dir = joinpath(base_dir, "n=$(N)_t=$(t_values[1])")
-    mkpath(root_output_dir)
-
     for T in t_values
         println("\n=== Running t=$T ===")
         instance = SpannerInstance(points, ones_w, T)
 
-        results = SpannerResult[]
+        output_dir = joinpath(root_output_dir, "t=$(T)")
+        algo_dir = joinpath(output_dir, "algorithms")
+        mkpath(algo_dir)
 
-        push!(results, run_greedy(instance))
-        push!(results, run_sqrt_greedy_dgf(instance, dist_matrix))
-        push!(results, run_yao(instance))
-        push!(results, run_yao_dgf(instance, dist_matrix))
-        push!(results, run_sqrt_yao_sqrt_greedy(instance))
+        # (display name, slug used for the cache file, runner closure)
+        algo_specs = Tuple{String, String, Function}[
+            ("Greedy",                       "greedy",                   () -> run_greedy(instance)),
+            ("sqrt(t)-Greedy+DGF",           "sqrt_t_greedy_dgf",        () -> run_sqrt_greedy_dgf(instance, dist_matrix)),
+            ("Yao",                          "yao",                      () -> run_yao(instance)),
+            ("Yao+DGF",                      "yao_dgf",                  () -> run_yao_dgf(instance, dist_matrix)),
+            ("sqrt(t)-Yao+sqrt(t)-Greedy",   "sqrt_t_yao_sqrt_t_greedy", () -> run_sqrt_yao_sqrt_greedy(instance)),
+        ]
         if run_dgf_algo
-            push!(results, run_dgf(instance, dist_matrix))
+            push!(algo_specs, ("DGF", "dgf", () -> run_dgf(instance, dist_matrix)))
         end
 
-        # Compute stats for all
-        for i in eachindex(results)
-            results[i] = Analysis.compute_stats(instance, results[i])
-            res = results[i]
+        results = SpannerResult[]
+        for (name, slug, runner) in algo_specs
+            res = run_or_load_algo(name, slug, algo_dir, instance, runner)
+            push!(results, res)
             println("     $(res.algorithm_name): edges=$(res.stats[:num_edges]), " *
                     "weight=$(round(res.stats[:total_weight], digits=3)), " *
                     "valid=$(res.stats[:is_valid_spanner]), " *
                     "time=$(round(res.runtime_seconds, digits=3))s")
         end
 
-        # Extract edge lists for all algorithms
         edge_lists = Dict{String, Vector{Tuple{Int,Int,Float64}}}()
         for res in results
             edge_lists[res.algorithm_name] = extract_edge_list(res.graph)
         end
-
-        # Save
-        output_dir = joinpath(root_output_dir, "t=$(T)")
-        mkpath(output_dir)
 
         data_path = joinpath(output_dir, "spanner_data.jld2")
         JLD2.save(data_path, Dict(
@@ -853,7 +913,7 @@ function main()
         println("Saved outputs to $output_dir")
         println("  - data:  $data_path")
         println("  - table: $table_path")
-        println("  - plot:  $plot_path")
+        println("  - per-algorithm cache: $algo_dir")
     end
 end
 

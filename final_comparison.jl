@@ -259,8 +259,21 @@ mutable struct DGFStats
     apsp_total_ms::Float64
     quick_hits::Int
     quick_misses::Int
+    # Adaptive bisect signals
+    bisect_calls::Int      # number of dgf_bisect! decisions recorded
+    clear_rate::Float64    # EMA of "all-clear" outcomes per bisect call (0..1)
 end
-DGFStats() = DGFStats(0, 0.0, 0, 0)
+DGFStats() = DGFStats(0, 0.0, 0, 0, 0, 1.0)
+
+# Update the all-clear EMA after a bisect call resolved its outcome.
+# `alpha` is the smoothing factor; higher = more weight on history.
+@inline function _record_bisect_outcome!(stats::DGFStats, all_clear::Bool;
+                                          alpha::Float64 = 0.9)
+    stats.bisect_calls += 1
+    outcome = all_clear ? 1.0 : 0.0
+    stats.clear_rate = alpha * stats.clear_rate + (1.0 - alpha) * outcome
+    return nothing
+end
 
 """
 Process `edge_list` one edge at a time. Assumes all edges are currently removed.
@@ -322,18 +335,36 @@ end
 function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
                       cleared::Ref{Int}, decided::Ref{Int}, total::Int,
                       stats::DGFStats, bisect_until_pct::Float64,
-                      leftover::Vector{Tuple{Int,Int,Float64}},
-                      depth::Int=0)
+                      leftover::Vector{Tuple{Int,Int,Float64}};
+                      min_bisect_size::Int = 8,
+                      clear_rate_floor::Float64 = 0.20,
+                      clear_rate_warmup::Int = 20,
+                      depth::Int = 0)
     if isempty(edge_list)
         return 0
     end
 
-    # Once `bisect_until_pct` of edges have been decided (cleared or restored
-    # as necessary), STOP bisecting: defer every still-undecided edge into
-    # `leftover` so the caller can run a single 1by1 pass over the union.
-    # All edges in `edge_list` are currently removed in `ctx` and stay removed
-    # until the top-level `apply_dgf!` restores them at the start of 1by1.
+    # --- Switching rules (in priority order). When any fires, the entire
+    # current `edge_list` is deferred to `leftover`. All edges are currently
+    # removed in `ctx` and stay removed until `apply_dgf!`'s single 1by1 pass
+    # restores them.
+
+    # Rule 1: hard global ceiling.
     if total > 0 && decided[] >= bisect_until_pct * total
+        append!(leftover, edge_list)
+        return 0
+    end
+
+    # Rule 2: small-batch — bisect overhead not worth it below the threshold.
+    if length(edge_list) <= min_bisect_size
+        append!(leftover, edge_list)
+        return 0
+    end
+
+    # Rule 3: adaptive clear-rate floor (after warmup). The EMA of recent
+    # all-clear outcomes proxies for the local removable fraction `p`; once
+    # bisect is succeeding rarely, 1by1 + quick-hit short-circuits are cheaper.
+    if stats.bisect_calls >= clear_rate_warmup && stats.clear_rate < clear_rate_floor
         append!(leftover, edge_list)
         return 0
     end
@@ -354,15 +385,20 @@ function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
         # All edges in this batch are removable
         cleared[] += length(edge_list)
         decided[] += length(edge_list)
+        _record_bisect_outcome!(stats, true)
         if length(edge_list) >= 4
             pct = round(100.0 * decided[] / total, digits=1)
             avg_ms = stats.apsp_count > 0 ? round(stats.apsp_total_ms / stats.apsp_count, digits=1) : 0.0
+            cr = round(stats.clear_rate, digits=2)
             # In-place updating line: \r returns to col 0, \033[2K clears the row.
-            print("\r\033[2K    [dgf] depth=$depth: cleared $(length(edge_list)) edges, total decided $(decided[])/$total ($(pct)%, cleared=$(cleared[])) [apsp=$(stats.apsp_count), avg=$(avg_ms)ms, quick_hits=$(stats.quick_hits)]")
+            print("\r\033[2K    [dgf] depth=$depth: cleared $(length(edge_list)) edges, total decided $(decided[])/$total ($(pct)%, cleared=$(cleared[])) [apsp=$(stats.apsp_count), avg=$(avg_ms)ms, quick_hits=$(stats.quick_hits), clear_rate=$cr]")
             flush(stdout)
         end
         return length(edge_list)
     end
+
+    # Violation path: this batch is not all-clear.
+    _record_bisect_outcome!(stats, false)
 
     # Single edge with violation -> it is necessary, restore it
     if length(edge_list) == 1
@@ -385,13 +421,21 @@ function dgf_bisect!(ctx::DGFContext, edge_list::Vector{Tuple{Int,Int,Float64}},
     for (u, v, _) in first_half
         dgf_rem_edge!(ctx, u, v)
     end
-    r1 = dgf_bisect!(ctx, first_half, cleared, decided, total, stats, bisect_until_pct, leftover, depth + 1)
+    r1 = dgf_bisect!(ctx, first_half, cleared, decided, total, stats, bisect_until_pct, leftover;
+                     min_bisect_size=min_bisect_size,
+                     clear_rate_floor=clear_rate_floor,
+                     clear_rate_warmup=clear_rate_warmup,
+                     depth=depth + 1)
 
     # Process second half
     for (u, v, _) in second_half
         dgf_rem_edge!(ctx, u, v)
     end
-    r2 = dgf_bisect!(ctx, second_half, cleared, decided, total, stats, bisect_until_pct, leftover, depth + 1)
+    r2 = dgf_bisect!(ctx, second_half, cleared, decided, total, stats, bisect_until_pct, leftover;
+                     min_bisect_size=min_bisect_size,
+                     clear_rate_floor=clear_rate_floor,
+                     clear_rate_warmup=clear_rate_warmup,
+                     depth=depth + 1)
 
     return r1 + r2
 end
@@ -400,7 +444,10 @@ end
 Apply DGF to graph `g` in-place. Returns number of edges removed.
 """
 function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Float64;
-                     bisect_until_pct::Float64=0.7)
+                     bisect_until_pct::Float64 = 0.7,
+                     min_bisect_size::Int = 8,
+                     clear_rate_floor::Float64 = 0.20,
+                     clear_rate_warmup::Int = 20)
     n = nv(g)
     ctx = DGFContext(n, dist_matrix, t)
 
@@ -416,11 +463,11 @@ function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Flo
     mode = if bisect_until_pct <= 0.0
         "one-by-one only"
     elseif bisect_until_pct >= 1.0
-        "binary search only"
+        "binary search only (+ adaptive)"
     else
-        "binary search → 1by1 at $(round(100*bisect_until_pct, digits=1))%"
+        "binary search → 1by1 at $(round(100*bisect_until_pct, digits=1))% (+ adaptive)"
     end
-    println("    [dgf] starting: $(n_before) edges, n=$n, t=$t, threads=$(Threads.nthreads()), mode=$mode")
+    println("    [dgf] starting: $(n_before) edges, n=$n, t=$t, threads=$(Threads.nthreads()), mode=$mode, adaptive=[min_size=$min_bisect_size, clear_floor=$clear_rate_floor, warmup=$clear_rate_warmup]")
 
     # Remove all edges
     for (u, v, _) in edge_list
@@ -435,7 +482,11 @@ function apply_dgf!(g::SimpleWeightedGraph, dist_matrix::Matrix{Float64}, t::Flo
     else
         leftover = Tuple{Int,Int,Float64}[]
         removed_bs = dgf_bisect!(ctx, edge_list, cleared, decided, n_before,
-                                  stats, bisect_until_pct, leftover, 0)
+                                  stats, bisect_until_pct, leftover;
+                                  min_bisect_size=min_bisect_size,
+                                  clear_rate_floor=clear_rate_floor,
+                                  clear_rate_warmup=clear_rate_warmup,
+                                  depth=0)
         # Ensure the in-place [dgf] line is committed before the next phase logs.
         println()
         removed_1by1 = isempty(leftover) ? 0 :

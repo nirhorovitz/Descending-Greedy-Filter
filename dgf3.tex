@@ -355,53 +355,10 @@ condition---that is, if for every $r,s\in P$ we have
 $\delta_{E\setminus S}(r,s) \le t\cdot|rs|$---then every edge in $S$
 is removable. A single APSP call therefore certifies the removal of an
 entire batch. When a violation is detected, we split the batch into two
-halves and recurse on each.
-
-\begin{algorithm}[h]
-\caption{DGF with recursive binary search}
-\label{alg:dgf-bisect-main}
-\begin{algorithmic}[1]
-\Statex \textbf{Input:} $P$, $t$ as in Algorithm~\ref{alg:dgf}.
-\Statex \textbf{Output:} a $t$-spanner $E$ of $P$ identical to the output of Algorithm~\ref{alg:dgf}.
-
-\State Sort the $\binom{n}{2}$ pairs in \textbf{non-ascending} order by distance into a list $L$.
-\State $E \leftarrow L$
-\State $E \leftarrow \textsc{Bisect}(\emptyset,\, L,\, P,\, t)$
-\State \Return $E$
-\end{algorithmic}
-\end{algorithm}
-
-\begin{algorithm*}[h]
-\caption{\textsc{Bisect}$(E,\,S,\,P,\,t)$}
-\label{alg:bisect}
-\begin{algorithmic}[1]
-\Statex \textbf{Input:}
-\Statex \hspace{1cm} $E$: current edge set (i.e.\ $S$ has been removed from $E$ before the call).
-\Statex \hspace{1cm} $S$: batch of candidate edges to confirm as removable, sorted in non-ascending order by weight.
-\Statex \hspace{1cm} $P$: point set.
-\Statex \hspace{1cm} $t$: stretch parameter.
-\Statex \textbf{Output:} updated $E$ in which the removable edges of $S$ are discarded and the necessary edges are restored.
-
-\If{$S = \emptyset$}
-    \State \Return $E$
-\EndIf
-\State Compute APSP on $(P,E)$.
-\If{$\delta_E(r,s) \le t \cdot |rs|$ for every $(r,s)\in P\times P$}
-    \State \Return $E$ \Comment{No violation: every edge in $S$ is removable}
-\EndIf
-\If{$|S|=1$}
-    \State $E \leftarrow E \cup S$ \Comment{Single necessary edge: restore it}
-    \State \Return $E$
-\EndIf
-\State Split $S$ into $S_1$ (first, longer half) and $S_2$ (second, shorter half).
-\State $E \leftarrow E \cup S$ \Comment{Restore all edges in $S$}
-\State $E \leftarrow E \setminus S_1$
-\State $E \leftarrow \textsc{Bisect}(E,\, S_1,\, P,\, t)$
-\State $E \leftarrow E \setminus S_2$
-\State $E \leftarrow \textsc{Bisect}(E,\, S_2,\, P,\, t)$
-\State \Return $E$
-\end{algorithmic}
-\end{algorithm*}
+halves and recurse on each. The pseudocode for the top-level driver
+(Algorithm~\ref{alg:dgf-bisect-main}) and the recursive
+\textsc{Bisect} routine (Algorithm~\ref{alg:bisect}) is given in
+Appendix~\ref{app:bisect-pseudocode}.
 
 \paragraph{Correctness and time complexity.}
 The binary-search implementation produces the same output as
@@ -721,6 +678,63 @@ whose total weight is at most $\wt(\MST(P))$; combined with the fact
 that each edge $(p,q)\in E$ contributes its own length $|pq|$ to some
 $T_{pq}$, this would yield $\wt(E) = O(\wt(\MST(P)))$ and hence
 Conjecture~\ref{conj:min-weight}.
+
+
+\section{Pseudocode of the recursive binary-search implementation}
+\label{app:bisect-pseudocode}
+
+This appendix gives the pseudocode for the binary-search variant of
+DGF described in Section~\ref{sec:binary-search}.
+Algorithm~\ref{alg:dgf-bisect-main} is the top-level driver, and
+Algorithm~\ref{alg:bisect} is the recursive routine that confirms or
+refines a contiguous batch of candidate-removable edges with a single
+$\APSP$ call.
+
+\begin{algorithm}[h]
+\caption{DGF with recursive binary search}
+\label{alg:dgf-bisect-main}
+\begin{algorithmic}[1]
+\Statex \textbf{Input:} $P$, $t$ as in Algorithm~\ref{alg:dgf}.
+\Statex \textbf{Output:} a $t$-spanner $E$ of $P$ identical to the output of Algorithm~\ref{alg:dgf}.
+
+\State Sort the $\binom{n}{2}$ pairs in \textbf{non-ascending} order by distance into a list $L$.
+\State $E \leftarrow L$
+\State $E \leftarrow \textsc{Bisect}(\emptyset,\, L,\, P,\, t)$
+\State \Return $E$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm*}[h]
+\caption{\textsc{Bisect}$(E,\,S,\,P,\,t)$}
+\label{alg:bisect}
+\begin{algorithmic}[1]
+\Statex \textbf{Input:}
+\Statex \hspace{1cm} $E$: current edge set (i.e.\ $S$ has been removed from $E$ before the call).
+\Statex \hspace{1cm} $S$: batch of candidate edges to confirm as removable, sorted in non-ascending order by weight.
+\Statex \hspace{1cm} $P$: point set.
+\Statex \hspace{1cm} $t$: stretch parameter.
+\Statex \textbf{Output:} updated $E$ in which the removable edges of $S$ are discarded and the necessary edges are restored.
+
+\If{$S = \emptyset$}
+    \State \Return $E$
+\EndIf
+\State Compute APSP on $(P,E)$.
+\If{$\delta_E(r,s) \le t \cdot |rs|$ for every $(r,s)\in P\times P$}
+    \State \Return $E$ \Comment{No violation: every edge in $S$ is removable}
+\EndIf
+\If{$|S|=1$}
+    \State $E \leftarrow E \cup S$ \Comment{Single necessary edge: restore it}
+    \State \Return $E$
+\EndIf
+\State Split $S$ into $S_1$ (first, longer half) and $S_2$ (second, shorter half).
+\State $E \leftarrow E \cup S$ \Comment{Restore all edges in $S$}
+\State $E \leftarrow E \setminus S_1$
+\State $E \leftarrow \textsc{Bisect}(E,\, S_1,\, P,\, t)$
+\State $E \leftarrow E \setminus S_2$
+\State $E \leftarrow \textsc{Bisect}(E,\, S_2,\, P,\, t)$
+\State \Return $E$
+\end{algorithmic}
+\end{algorithm*}
 
 
 \section{Detailed experimental tables}

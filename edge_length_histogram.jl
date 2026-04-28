@@ -19,7 +19,7 @@
 # =============================================================================
 
 using Pkg
-Pkg.activate(joinpath(@__DIR__, "..", "SpannerComparison"))
+Pkg.activate(joinpath(@__DIR__, "SpannerComparison"))
 
 using JLD2
 using Plots

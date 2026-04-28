@@ -15,16 +15,18 @@ The algorithms compared are:
 
 ## Prerequisites
 
-- **Julia** ≥ 1.10 (the script targets `1.11`/`1.12` — see `../SpannerComparison/Project.toml`).
-- The `SpannerComparison` package living one directory up at
-  `../SpannerComparison` relative to this folder. The script automatically
-  activates that environment via `Pkg.activate(joinpath(@__DIR__, "..", "SpannerComparison"))`.
-- First-time setup (run once, from the `SpannerComparison` directory):
+- **Julia** ≥ 1.10 (the script targets `1.11`/`1.12` — see `SpannerComparison/Project.toml`).
+- The `SpannerComparison` package is vendored in this repo at `./SpannerComparison`.
+  The scripts automatically activate it via
+  `Pkg.activate(joinpath(@__DIR__, "SpannerComparison"))`.
+- First-time setup (run once, from this `final/` directory):
 
 ```bash
-cd ../SpannerComparison
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --project=SpannerComparison -e 'using Pkg; Pkg.instantiate()'
 ```
+
+This installs the exact dependency versions pinned in
+`SpannerComparison/Manifest.toml`.
 
 ## Running
 

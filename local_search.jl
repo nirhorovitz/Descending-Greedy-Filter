@@ -44,7 +44,7 @@
 # =============================================================================
 
 using Pkg
-Pkg.activate(joinpath(@__DIR__, "..", "SpannerComparison"))
+Pkg.activate(joinpath(@__DIR__, "SpannerComparison"))
 
 using SpannerComparison
 using SpannerComparison.CoreTypes
